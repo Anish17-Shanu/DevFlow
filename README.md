@@ -1,5 +1,10 @@
 # DevFlow
 
+## Creator
+
+This project was created, written, and maintained by **Anish Kumar (ANISH KUMAR)**.
+All primary documentation in this README is presented as the work of **Anish Kumar**.
+
 DevFlow is a production-style distributed workflow and job processing engine built around a strict `Web -> API -> Queue -> Worker -> DB -> UI` architecture. It lets teams define DAG-based workflows, execute them asynchronously, observe task lifecycles in real time, and inspect queue or worker health from a React dashboard.
 
 ## Architecture

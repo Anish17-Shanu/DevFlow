@@ -9,7 +9,7 @@ export default function Header({ activePage, setActivePage }) {
   return (
     <header className="shell-header">
       <div>
-        <p className="eyebrow">Distributed Workflow & Job Processing Engine</p>
+        <p className="eyebrow">Distributed Workflow & Job Processing Engine • Created by Anish Kumar</p>
         <h1>DevFlow</h1>
       </div>
       <nav className="nav-tabs">
