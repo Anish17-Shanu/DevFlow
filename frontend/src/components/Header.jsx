@@ -10,7 +10,7 @@ export default function Header({ activePage, setActivePage, health, readiness, o
   return (
     <header className="shell-header">
       <div>
-        <p className="eyebrow">Distributed Workflow & Job Processing Engine | Created by ANISH KUMAR</p>
+        <p className="eyebrow">Distributed Workflow & Job Processing Engine | Created by Anish Kumar</p>
         <h1>DevFlow</h1>
         <div className="header-meta">
           <span className={`status-pill ${platformStatus === "ok" ? "success" : "retrying"}`}>{platformStatus}</span>
