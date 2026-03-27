@@ -5,30 +5,29 @@
 This project was created, written, and maintained by **Anish Kumar (ANISH KUMAR)**.
 All primary documentation in this README is presented as the work of **Anish Kumar**.
 
-DevFlow is a production-style distributed workflow and job processing engine built around a strict `Web -> API -> Queue -> Worker -> DB -> UI` architecture. It lets teams define DAG-based workflows, execute them asynchronously, observe task lifecycles in real time, and inspect queue or worker health from a React dashboard.
+DevFlow is a production-style distributed workflow and job processing engine built around a strict `Web -> API -> Queue -> Worker -> DB -> UI` architecture. Teams can define DAG-based workflows, execute them asynchronously, inspect task lifecycles in real time, and monitor queue or worker health from a React control plane.
+
+## Highlights
+
+- FastAPI backend with workflow, execution, monitoring, and websocket endpoints.
+- Durable database-backed queue with leased jobs and stale-lease recovery.
+- Dedicated worker process model for multi-process deployment.
+- PostgreSQL-ready runtime plus SQLite support for local development.
+- Live execution refresh with websocket delivery and polling fallback.
+- Health and readiness probes for container and platform deployments.
+- Production-oriented Docker Compose stack with API, worker, PostgreSQL, and static frontend hosting.
+- Automated backend tests plus frontend production build verification.
 
 ## Architecture
 
-- `backend/main.py`: FastAPI application bootstrap, lifecycle hooks, and route registration.
-- `backend/api`: HTTP and WebSocket delivery layer.
-- `backend/controllers`: Thin controller layer for workflows, executions, and monitoring.
-- `backend/services`: DAG validation, workflow creation, execution orchestration, logging, realtime broadcast, and seed loading.
-- `backend/queue`: Custom in-memory queue with FIFO ordering, delay support, priorities, retries, and in-flight tracking.
-- `backend/workers`: Stateless worker runtime that polls the queue concurrently.
-- `frontend/src/pages`: Workflow builder, execution dashboard, logs view, and worker monitor.
+- [Architecture Guide](d:/Project/DevFlow/docs/ARCHITECTURE.md)
+- [API Guide](d:/Project/DevFlow/docs/API.md)
+- [Deployment Guide](d:/Project/DevFlow/docs/DEPLOYMENT.md)
+- [Operations Runbook](d:/Project/DevFlow/docs/OPERATIONS.md)
+- [Troubleshooting Guide](d:/Project/DevFlow/docs/TROUBLESHOOTING.md)
+- [Contributing Guide](d:/Project/DevFlow/docs/CONTRIBUTING.md)
 
-## Features
-
-- DAG validation with cycle detection.
-- Async workflow execution with dependency-aware scheduling.
-- Task states: `pending`, `queued`, `running`, `success`, `failed`, `retrying`.
-- Exponential backoff retries driven by task config.
-- Parallel workers polling a shared queue abstraction.
-- Live execution refresh over WebSocket plus polling fallback.
-- SQLite default development database with PostgreSQL-ready SQLAlchemy setup.
-- Sample seeded workflows for immediate exploration.
-
-## API
+## Core API
 
 - `POST /api/workflows`
 - `GET /api/workflows`
@@ -39,10 +38,13 @@ DevFlow is a production-style distributed workflow and job processing engine bui
 - `GET /api/executions/{id}/logs`
 - `GET /api/queue/status`
 - `GET /api/workers/status`
+- `GET /api/system/snapshot`
 - `GET /health`
+- `GET /health/live`
+- `GET /health/ready`
 - `GET /ws/executions/{id}`
 
-## Local Setup
+## Local Development
 
 ### Backend
 
@@ -54,6 +56,14 @@ pip install -r backend/requirements.txt
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+### Dedicated Worker
+
+```bash
+cd DevFlow
+.venv\Scripts\activate
+python -m backend.worker_main
+```
+
 ### Frontend
 
 ```bash
@@ -62,10 +72,42 @@ npm install
 npm run dev
 ```
 
-## Docker
+## Docker Deployment
 
 ```bash
-docker-compose up --build
+docker compose up --build
+```
+
+Default container endpoints:
+
+- Frontend: `http://localhost:8080`
+- API: `http://localhost:8000`
+- Liveness: `http://localhost:8000/health/live`
+- Readiness: `http://localhost:8000/health/ready`
+
+## Environment Variables
+
+Copy [.env.example](d:/Project/DevFlow/.env.example) to `.env` and adjust values as needed.
+
+- `DEVFLOW_ENVIRONMENT`
+- `DEVFLOW_APP_VERSION`
+- `DEVFLOW_DATABASE_URL`
+- `DEVFLOW_WORKER_COUNT`
+- `DEVFLOW_WORKER_POLL_INTERVAL_MS`
+- `DEVFLOW_WORKER_HEARTBEAT_INTERVAL_SECONDS`
+- `DEVFLOW_INLINE_WORKERS_ENABLED`
+- `DEVFLOW_CORS_ORIGINS`
+- `DEVFLOW_DOCS_ENABLED`
+- `DEVFLOW_LOG_LEVEL`
+- `DEVFLOW_QUEUE_LEASE_SECONDS`
+- `DEVFLOW_REALTIME_POLL_INTERVAL_MS`
+
+## Verification
+
+```bash
+python -m pytest
+cd frontend
+npm run build
 ```
 
 ## Sample Workflow Payload

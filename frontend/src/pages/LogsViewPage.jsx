@@ -1,10 +1,11 @@
-export default function LogsViewPage({ logs }) {
+export default function LogsViewPage({ logs, execution }) {
   return (
     <section className="panel">
       <div className="panel-heading">
         <h2>Execution logs</h2>
         <p>Every state transition and worker action is persisted for auditability.</p>
       </div>
+      {execution ? <div className="success-text">Showing logs for execution {execution.id}</div> : null}
       <div className="logs-list">
         {logs.length ? (
           logs.map((log) => (

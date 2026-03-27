@@ -10,11 +10,16 @@ import { api } from "./services/api";
 export default function App() {
   const [activePage, setActivePage] = useState("builder");
   const [workflows, setWorkflows] = useState([]);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
   const [execution, setExecution] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [logs, setLogs] = useState([]);
   const [queue, setQueue] = useState(null);
   const [workers, setWorkers] = useState([]);
+  const [health, setHealth] = useState(null);
+  const [readiness, setReadiness] = useState(null);
+  const [isBooting, setIsBooting] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState("");
 
   const selectedExecutionId = execution?.id || "";
@@ -22,16 +27,26 @@ export default function App() {
   const loadWorkflows = async () => {
     const data = await api.listWorkflows();
     setWorkflows(data);
+    setSelectedWorkflowId((current) => current || data[0]?.id || "");
   };
 
   const loadRuntime = async () => {
-    const [queueData, workersData] = await Promise.all([api.getQueueStatus(), api.getWorkersStatus()]);
-    setQueue(queueData);
-    setWorkers(workersData);
+    const [snapshotData, healthData, readinessData] = await Promise.all([
+      api.getSystemSnapshot(),
+      api.getHealth(),
+      api.getReadiness()
+    ]);
+    setQueue(snapshotData?.queue ?? null);
+    setWorkers(snapshotData?.workers ?? []);
+    setHealth(healthData);
+    setReadiness(readinessData);
   };
 
   const loadExecution = async (executionId) => {
     if (!executionId) {
+      setExecution(null);
+      setTasks([]);
+      setLogs([]);
       return;
     }
 
@@ -52,6 +67,8 @@ export default function App() {
         await Promise.all([loadWorkflows(), loadRuntime()]);
       } catch (bootError) {
         setError(bootError.message);
+      } finally {
+        setIsBooting(false);
       }
     };
 
@@ -87,20 +104,42 @@ export default function App() {
   const handleCreateWorkflow = async (payload) => {
     const created = await api.createWorkflow(payload);
     setWorkflows((current) => [created, ...current]);
+    setSelectedWorkflowId(created.id);
   };
 
   const handleRunWorkflow = async (workflowId) => {
     const run = await api.runWorkflow(workflowId);
+    setSelectedWorkflowId(workflowId);
     await loadExecution(run.id);
     await loadRuntime();
     setActivePage("executions");
   };
 
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    setError("");
+    try {
+      await Promise.all([loadWorkflows(), loadRuntime(), loadExecution(selectedExecutionId)]);
+    } catch (refreshError) {
+      setError(refreshError.message);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   return (
     <div className="app-shell">
-      <Header activePage={activePage} setActivePage={setActivePage} />
+      <Header
+        activePage={activePage}
+        setActivePage={setActivePage}
+        health={health}
+        readiness={readiness}
+        onRefresh={handleRefresh}
+        isRefreshing={isRefreshing}
+      />
 
       {error ? <div className="global-error">{error}</div> : null}
+      {isBooting ? <div className="empty-state">Loading control plane...</div> : null}
 
       {activePage === "builder" ? (
         <WorkflowBuilderPage
@@ -108,16 +147,17 @@ export default function App() {
           onCreateWorkflow={handleCreateWorkflow}
           onRunWorkflow={handleRunWorkflow}
           lastExecutionId={selectedExecutionId}
+          selectedWorkflowId={selectedWorkflowId}
         />
       ) : null}
 
       {activePage === "executions" ? (
-        <ExecutionDashboardPage execution={execution} tasks={tasks} workflows={workflows} />
+        <ExecutionDashboardPage execution={execution} tasks={tasks} workflows={workflows} queue={queue} workers={workers} />
       ) : null}
 
-      {activePage === "logs" ? <LogsViewPage logs={logs} /> : null}
+      {activePage === "logs" ? <LogsViewPage logs={logs} execution={execution} /> : null}
 
-      {activePage === "workers" ? <WorkerMonitorPage queue={queue} workers={workers} /> : null}
+      {activePage === "workers" ? <WorkerMonitorPage queue={queue} workers={workers} readiness={readiness} /> : null}
     </div>
   );
 }

@@ -11,7 +11,7 @@
   --danger: #b13f2e;
   --success: #257c48;
   --shadow: 0 24px 60px rgba(23, 35, 34, 0.12);
-  font-family: "Segoe UI", sans-serif;
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
 }
 
 * {
@@ -26,6 +26,18 @@ body {
     radial-gradient(circle at top left, rgba(13, 107, 97, 0.18), transparent 28%),
     radial-gradient(circle at top right, rgba(217, 128, 50, 0.18), transparent 24%),
     linear-gradient(180deg, #fdf7ec 0%, var(--bg) 100%);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(13, 107, 97, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(13, 107, 97, 0.035) 1px, transparent 1px);
+  background-size: 36px 36px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.5), transparent);
 }
 
 button,
@@ -66,7 +78,7 @@ input {
   display: flex;
   justify-content: space-between;
   gap: 1.5rem;
-  align-items: flex-end;
+  align-items: flex-start;
   margin-bottom: 2rem;
 }
 
@@ -87,6 +99,24 @@ input {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
+}
+
+.header-meta,
+.header-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.meta-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.4rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(29, 43, 42, 0.08);
+  font-size: 0.85rem;
 }
 
 .tab {
@@ -212,6 +242,11 @@ label {
   color: #8d5515;
 }
 
+.workflow-card-active {
+  border-color: rgba(13, 107, 97, 0.4);
+  box-shadow: 0 12px 30px rgba(13, 107, 97, 0.08);
+}
+
 .detail-grid,
 .stats-grid {
   display: grid;
@@ -236,6 +271,10 @@ label {
 
 .stat-card strong {
   font-size: 2rem;
+}
+
+.stat-card small {
+  opacity: 0.85;
 }
 
 .accent-blue {
@@ -322,5 +361,9 @@ label {
 
   .form-actions {
     flex-direction: column;
+  }
+
+  .header-actions {
+    justify-content: flex-start;
   }
 }

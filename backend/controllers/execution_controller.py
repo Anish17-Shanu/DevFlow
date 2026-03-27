@@ -1,5 +1,7 @@
 from fastapi import HTTPException
 
+from backend.services.dag_service import DagValidationError
+
 from backend.repositories.execution_repository import ExecutionRepository
 
 
@@ -12,6 +14,8 @@ class ExecutionController:
     async def run_workflow(self, workflow_id: str):
         try:
             return await self.execution_service.trigger_workflow(self.session, workflow_id)
+        except DagValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

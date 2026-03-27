@@ -15,7 +15,11 @@ async function request(path, options = {}) {
     throw new Error(payload.detail || "Request failed");
   }
 
-  return response.json();
+  if (response.status === 204) {
+    return null;
+  }
+
+  return response.json().catch(() => null);
 }
 
 export const api = {
@@ -34,5 +38,8 @@ export const api = {
   getExecutionLogs: (id) => request(`/executions/${id}/logs`),
   getQueueStatus: () => request("/queue/status"),
   getWorkersStatus: () => request("/workers/status"),
+  getSystemSnapshot: () => request("/system/snapshot"),
+  getHealth: () => request("/health"),
+  getReadiness: () => request("/health/ready"),
   executionSocket: (executionId) => new WebSocket(`${WS_BASE}/ws/executions/${executionId}`)
 };

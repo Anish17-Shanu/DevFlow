@@ -6,14 +6,15 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from backend.core.time import utc_now
 from backend.models.entities import Execution, ExecutionStatus, ExecutionTask, TaskState, Workflow
-from backend.queue.job_queue import InMemoryJobQueue, QueueJob
+from backend.queue.job_queue import DatabaseJobQueue, QueueJob
 from backend.services.log_service import LogService
 from backend.services.realtime_service import RealtimeService
 
 
 class ExecutionService:
-    def __init__(self, queue: InMemoryJobQueue, realtime: RealtimeService):
+    def __init__(self, queue: DatabaseJobQueue, realtime: RealtimeService):
         self.queue = queue
         self.realtime = realtime
 
@@ -27,7 +28,8 @@ class ExecutionService:
         execution = Execution(
             workflow_id=workflow.id,
             status=ExecutionStatus.running,
-            started_at=datetime.utcnow(),
+            started_at=utc_now(),
+            updated_at=utc_now(),
         )
         session.add(execution)
         await session.flush()
@@ -66,8 +68,9 @@ class ExecutionService:
 
             if any(state == TaskState.failed for state in dependency_states):
                 item.status = TaskState.failed
-                item.finished_at = datetime.utcnow()
+                item.finished_at = utc_now()
                 item.error_message = "Blocked by failed dependency."
+                execution.updated_at = utc_now()
                 await LogService.write(
                     session,
                     execution.id,
@@ -82,15 +85,17 @@ class ExecutionService:
                 config = item.task.config or {}
                 delay_seconds = float(config.get("delay_seconds", 0))
                 item.status = TaskState.queued
+                execution.updated_at = utc_now()
                 await self.queue.enqueue(
                     QueueJob(
                         execution_task_id=item.id,
                         execution_id=execution.id,
                         task_id=item.task_id,
                         priority=int(config.get("priority", 0)),
-                        available_at=datetime.utcnow() + timedelta(seconds=delay_seconds),
+                        available_at=utc_now() + timedelta(seconds=delay_seconds),
                         retry_count=item.retries,
-                    )
+                    ),
+                    session=session,
                 )
                 await LogService.write(
                     session,
@@ -106,7 +111,7 @@ class ExecutionService:
         if changed:
             await self.realtime.broadcast(execution.id, {"type": "execution.updated", "executionId": execution.id})
 
-    async def execute_task(self, session, execution_task_id: str, worker_id: str) -> None:
+    async def execute_task(self, session, execution_task_id: str, worker_id: str, queue_job_id: str) -> None:
         item = await session.scalar(
             select(ExecutionTask)
             .where(ExecutionTask.id == execution_task_id)
@@ -117,17 +122,18 @@ class ExecutionService:
             )
         )
         if not item:
-            await self.queue.acknowledge(execution_task_id)
+            await self.queue.acknowledge(queue_job_id)
             return
 
         if item.status in {TaskState.success, TaskState.failed}:
-            await self.queue.acknowledge(execution_task_id)
+            await self.queue.acknowledge(queue_job_id)
             return
 
         item.status = TaskState.running
-        item.started_at = item.started_at or datetime.utcnow()
+        item.started_at = item.started_at or utc_now()
         item.worker_id = worker_id
-        item.last_heartbeat_at = datetime.utcnow()
+        item.last_heartbeat_at = utc_now()
+        item.execution.updated_at = utc_now()
         await LogService.write(
             session,
             item.execution_id,
@@ -155,6 +161,7 @@ class ExecutionService:
 
             if item.retries <= max_retries:
                 item.status = TaskState.retrying
+                item.execution.updated_at = utc_now()
                 await LogService.write(
                     session,
                     item.execution_id,
@@ -162,20 +169,20 @@ class ExecutionService:
                     level="WARNING",
                     task_id=item.task_id,
                 )
-                await session.commit()
-                await self.queue.acknowledge(execution_task_id)
-
+                await self.queue.acknowledge(queue_job_id, session=session)
                 item.status = TaskState.queued
-                item.last_heartbeat_at = datetime.utcnow()
+                item.last_heartbeat_at = utc_now()
+                item.execution.updated_at = utc_now()
                 await self.queue.enqueue(
                     QueueJob(
                         execution_task_id=item.id,
                         execution_id=item.execution_id,
                         task_id=item.task_id,
                         priority=int(config.get("priority", 0)),
-                        available_at=datetime.utcnow() + timedelta(seconds=backoff_seconds * (2 ** (item.retries - 1))),
+                        available_at=utc_now() + timedelta(seconds=backoff_seconds * (2 ** (item.retries - 1))),
                         retry_count=item.retries,
-                    )
+                    ),
+                    session=session,
                 )
                 await session.commit()
                 await self.realtime.broadcast(
@@ -185,7 +192,8 @@ class ExecutionService:
                 return
 
             item.status = TaskState.failed
-            item.finished_at = datetime.utcnow()
+            item.finished_at = utc_now()
+            item.execution.updated_at = utc_now()
             await LogService.write(
                 session,
                 item.execution_id,
@@ -193,7 +201,7 @@ class ExecutionService:
                 level="ERROR",
                 task_id=item.task_id,
             )
-            await self.queue.acknowledge(execution_task_id)
+            await self.queue.acknowledge(queue_job_id, session=session)
             await self._fail_downstream(session, item)
             await self._finalize_execution(session, item.execution_id)
             await session.commit()
@@ -204,15 +212,16 @@ class ExecutionService:
             return
 
         item.status = TaskState.success
-        item.finished_at = datetime.utcnow()
+        item.finished_at = utc_now()
         item.error_message = None
+        item.execution.updated_at = utc_now()
         await LogService.write(
             session,
             item.execution_id,
             f"Task '{item.task.name}' completed successfully.",
             task_id=item.task_id,
         )
-        await self.queue.acknowledge(execution_task_id)
+        await self.queue.acknowledge(queue_job_id, session=session)
         await session.commit()
 
         await self.enqueue_ready_tasks(session, item.execution_id)
@@ -247,8 +256,9 @@ class ExecutionService:
                 dependency_names = item.task.dependencies or []
                 if any(execution_items[workflow_tasks[name].id].status == TaskState.failed for name in dependency_names):
                     item.status = TaskState.failed
-                    item.finished_at = datetime.utcnow()
+                    item.finished_at = utc_now()
                     item.error_message = "Blocked by failed dependency."
+                    execution.updated_at = utc_now()
                     await LogService.write(
                         session,
                         execution.id,
@@ -262,14 +272,17 @@ class ExecutionService:
         states = {task.status for task in execution.execution_tasks}
         if states and all(state == TaskState.success for state in states):
             execution.status = ExecutionStatus.success
-            execution.finished_at = execution.finished_at or datetime.utcnow()
+            execution.finished_at = execution.finished_at or utc_now()
+            execution.updated_at = utc_now()
             return
         if any(state == TaskState.failed for state in states):
             execution.status = ExecutionStatus.failed
-            execution.finished_at = execution.finished_at or datetime.utcnow()
+            execution.finished_at = execution.finished_at or utc_now()
+            execution.updated_at = utc_now()
             return
         execution.status = ExecutionStatus.running
         execution.finished_at = None
+        execution.updated_at = utc_now()
 
     async def _finalize_execution(self, session, execution_id: str) -> None:
         execution = await self._get_execution_with_tasks(session, execution_id)

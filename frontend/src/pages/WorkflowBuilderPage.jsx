@@ -1,8 +1,23 @@
 import { useState } from "react";
 
-const createEmptyTask = () => ({ name: "", dependencies: "", duration_ms: 1000, max_retries: 0, fail_first_n: 0 });
+const createEmptyTask = () => ({
+  name: "",
+  dependencies: "",
+  duration_ms: 1000,
+  max_retries: 0,
+  fail_first_n: 0,
+  backoff_seconds: 1,
+  delay_seconds: 0,
+  priority: 0
+});
 
-export default function WorkflowBuilderPage({ workflows, onCreateWorkflow, onRunWorkflow, lastExecutionId }) {
+export default function WorkflowBuilderPage({
+  workflows,
+  onCreateWorkflow,
+  onRunWorkflow,
+  lastExecutionId,
+  selectedWorkflowId
+}) {
   const [name, setName] = useState("");
   const [tasks, setTasks] = useState([createEmptyTask()]);
   const [submitting, setSubmitting] = useState(false);
@@ -31,7 +46,10 @@ export default function WorkflowBuilderPage({ workflows, onCreateWorkflow, onRun
           config: {
             duration_ms: Number(task.duration_ms),
             max_retries: Number(task.max_retries),
-            fail_first_n: Number(task.fail_first_n)
+            fail_first_n: Number(task.fail_first_n),
+            backoff_seconds: Number(task.backoff_seconds),
+            delay_seconds: Number(task.delay_seconds),
+            priority: Number(task.priority)
           }
         }))
       });
@@ -49,7 +67,7 @@ export default function WorkflowBuilderPage({ workflows, onCreateWorkflow, onRun
       <div className="panel panel-form">
         <div className="panel-heading">
           <h2>Design a workflow DAG</h2>
-          <p>Define task topology, retry policy, and simulated runtime behavior.</p>
+          <p>Define topology, timing, retry policy, and scheduling priority for each task.</p>
         </div>
         <form className="workflow-form" onSubmit={handleSubmit}>
           <label>
@@ -95,12 +113,42 @@ export default function WorkflowBuilderPage({ workflows, onCreateWorkflow, onRun
                   />
                 </label>
                 <label>
+                  Retry backoff seconds
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={task.backoff_seconds}
+                    onChange={(event) => updateTask(index, "backoff_seconds", event.target.value)}
+                  />
+                </label>
+                <label>
                   Fail first N runs
                   <input
                     type="number"
                     min="0"
                     value={task.fail_first_n}
                     onChange={(event) => updateTask(index, "fail_first_n", event.target.value)}
+                  />
+                </label>
+                <label>
+                  Initial delay seconds
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={task.delay_seconds}
+                    onChange={(event) => updateTask(index, "delay_seconds", event.target.value)}
+                  />
+                </label>
+                <label>
+                  Priority
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={task.priority}
+                    onChange={(event) => updateTask(index, "priority", event.target.value)}
                   />
                 </label>
               </div>
@@ -125,7 +173,10 @@ export default function WorkflowBuilderPage({ workflows, onCreateWorkflow, onRun
         </div>
         <div className="workflow-list">
           {workflows.map((workflow) => (
-            <article key={workflow.id} className="workflow-card">
+            <article
+              key={workflow.id}
+              className={workflow.id === selectedWorkflowId ? "workflow-card workflow-card-active" : "workflow-card"}
+            >
               <div>
                 <strong>{workflow.name}</strong>
                 <span>{workflow.tasks.length} tasks</span>
