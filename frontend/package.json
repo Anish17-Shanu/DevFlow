@@ -2,7 +2,7 @@
   "name": "devflow-frontend",
   "version": "1.0.0",
   "private": true,
-  "author": "Anish Kumar",
+  "author": "ANISH KUMAR",
   "type": "module",
   "scripts": {
     "dev": "vite",

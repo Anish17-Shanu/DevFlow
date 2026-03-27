@@ -2,8 +2,8 @@
 
 ## Creator
 
-This project was created, written, and maintained by **Anish Kumar (ANISH KUMAR)**.
-All primary documentation in this README is presented as the work of **Anish Kumar**.
+This project was created, written, and maintained by **ANISH KUMAR**.
+All primary documentation in this README is presented as the work of **ANISH KUMAR**.
 
 DevFlow is a production-style distributed workflow and job processing engine built around a strict `Web -> API -> Queue -> Worker -> DB -> UI` architecture. Teams can define DAG-based workflows, execute them asynchronously, inspect task lifecycles in real time, and monitor queue or worker health from a React control plane.
 
