@@ -74,7 +74,7 @@ jobs:
       name: staging
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-kubectl@v4
+      - uses: azure/setup-kubectl@v5
         with:
           version: "v1.30.4"
       - uses: imranismail/setup-kustomize@v2
@@ -117,7 +117,7 @@ jobs:
       name: production
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-kubectl@v4
+      - uses: azure/setup-kubectl@v5
         with:
           version: "v1.30.4"
       - uses: imranismail/setup-kustomize@v2
