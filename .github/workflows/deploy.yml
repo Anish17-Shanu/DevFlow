@@ -1,0 +1,152 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment (production runs staging first)"
+        type: choice
+        options: [staging, production]
+        default: staging
+      image_tag:
+        description: "Image tag built by this run (e.g. 2.0.1 or a commit SHA)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/api:${{ inputs.image_tag }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+      - name: Build and push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          file: frontend/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/web:${{ inputs.image_tag }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign images (keyless)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes ${{ env.IMAGE_PREFIX }}/api:${{ inputs.image_tag }}
+          cosign sign --yes ${{ env.IMAGE_PREFIX }}/web:${{ inputs.image_tag }}
+
+  staging:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: "v1.30.4"
+      - uses: imranismail/setup-kustomize@v2
+        with:
+          kustomize-version: "5.8.1"
+      - name: Configure cluster access
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG_STAGING }}
+        run: |
+          umask 077
+          printf '%s' "${KUBE_CONFIG}" > "${RUNNER_TEMP}/kubeconfig"
+          echo "KUBECONFIG=${RUNNER_TEMP}/kubeconfig" >> "${GITHUB_ENV}"
+      - name: Set image tags
+        working-directory: deploy/k8s
+        run: |
+          kustomize edit set image devflow-api=${IMAGE_PREFIX}/api:${{ inputs.image_tag }}
+          kustomize edit set image devflow-web=${IMAGE_PREFIX}/web:${{ inputs.image_tag }}
+      - name: Run database migration job
+        run: |
+          kubectl -n devflow delete job devflow-migrate --ignore-not-found
+          kubectl apply -k deploy/k8s
+          kubectl -n devflow wait --for=condition=complete job/devflow-migrate --timeout=300s
+      - name: Roll out API, workers, and web
+        run: |
+          kubectl -n devflow rollout status deployment/api --timeout=300s
+          kubectl -n devflow rollout status deployment/worker --timeout=300s
+          kubectl -n devflow rollout status deployment/web --timeout=180s
+      - name: Smoke test staging
+        env:
+          BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+          API_KEY: ${{ secrets.STAGING_API_KEY }}
+        run: bash scripts/smoke_test.sh "${BASE_URL}" "${API_KEY}"
+
+  production:
+    needs: staging
+    if: inputs.environment == 'production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: "v1.30.4"
+      - uses: imranismail/setup-kustomize@v2
+        with:
+          kustomize-version: "5.8.1"
+      - name: Configure cluster access
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
+        run: |
+          umask 077
+          printf '%s' "${KUBE_CONFIG}" > "${RUNNER_TEMP}/kubeconfig"
+          echo "KUBECONFIG=${RUNNER_TEMP}/kubeconfig" >> "${GITHUB_ENV}"
+      - name: Set image tags
+        working-directory: deploy/k8s
+        run: |
+          kustomize edit set image devflow-api=${IMAGE_PREFIX}/api:${{ inputs.image_tag }}
+          kustomize edit set image devflow-web=${IMAGE_PREFIX}/web:${{ inputs.image_tag }}
+      - name: Run database migration job
+        run: |
+          kubectl -n devflow delete job devflow-migrate --ignore-not-found
+          kubectl apply -k deploy/k8s
+          kubectl -n devflow wait --for=condition=complete job/devflow-migrate --timeout=300s
+      - name: Roll out API, workers, and web
+        run: |
+          kubectl -n devflow rollout status deployment/api --timeout=300s
+          kubectl -n devflow rollout status deployment/worker --timeout=300s
+          kubectl -n devflow rollout status deployment/web --timeout=180s
+      - name: Smoke test production
+        env:
+          BASE_URL: ${{ secrets.PRODUCTION_BASE_URL }}
+          API_KEY: ${{ secrets.PRODUCTION_API_KEY }}
+        run: bash scripts/smoke_test.sh "${BASE_URL}" "${API_KEY}"

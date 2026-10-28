@@ -36,6 +36,8 @@ Workers renew job leases while they are active. If a worker crashes or disappear
 
 The frontend receives websocket notifications from the API process. Since workers may run separately, DevFlow uses a lightweight execution notifier that polls execution update timestamps from the database and rebroadcasts them through the API websocket layer.
 
+When the API runs on PostgreSQL with more than one replica, notifier events are also published to a Postgres `LISTEN/NOTIFY` channel (`DEVFLOW_REALTIME_CHANNEL`, default `devflow_events`). Every replica listens on that channel and forwards each event to its own connected sockets, skipping the publishing replica because it already delivered locally. This keeps execution updates live regardless of which replica serves the websocket and which process executes the task. Set `DEVFLOW_REALTIME_BUS=off` to keep fan-out local; SQLite deployments always stay local.
+
 ## Deployment Topology
 
 Recommended production topology:

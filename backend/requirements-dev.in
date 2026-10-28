@@ -1,0 +1,7 @@
+# Direct development dependencies for DevFlow.
+# Compile with: pip-compile --generate-hashes requirements-dev.in
+-r requirements.in
+pytest==9.2.0
+pytest-asyncio==1.4.1
+pytest-cov==7.0.0
+ruff==0.17.3

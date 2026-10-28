@@ -6,14 +6,14 @@ class MonitorController:
         self.queue = queue
         self.worker_manager = worker_manager
 
-    async def queue_status(self) -> QueueStatusResponse:
-        return QueueStatusResponse(**(await self.queue.stats()))
+    async def queue_status(self, tenant_id: str | None) -> QueueStatusResponse:
+        return QueueStatusResponse(**(await self.queue.stats(tenant_id)))
 
     async def worker_status(self) -> list[WorkerStatusResponse]:
         return [WorkerStatusResponse(**snapshot.__dict__) for snapshot in await self.worker_manager.snapshots()]
 
-    async def snapshot(self) -> SystemSnapshotResponse:
+    async def snapshot(self, tenant_id: str | None) -> SystemSnapshotResponse:
         return SystemSnapshotResponse(
-            queue=QueueStatusResponse(**(await self.queue.stats())),
+            queue=QueueStatusResponse(**(await self.queue.stats(tenant_id))),
             workers=[WorkerStatusResponse(**snapshot.__dict__) for snapshot in await self.worker_manager.snapshots()],
         )

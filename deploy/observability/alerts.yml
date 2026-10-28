@@ -1,0 +1,79 @@
+groups:
+  - name: devflow-api
+    rules:
+      - alert: DevFlowApiHighErrorRate
+        expr: |
+          sum(rate(devflow_http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(devflow_http_requests_total[5m])), 0.001) > 0.05
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: DevFlow API is returning more than 5% 5xx responses.
+          runbook_url: https://github.com/OWNER/DevFlow/blob/main/docs/RUNBOOK.md#high-api-error-rate
+
+      - alert: DevFlowApiLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(devflow_http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 1
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: DevFlow API p95 latency is above 1s.
+          runbook_url: https://github.com/OWNER/DevFlow/blob/main/docs/RUNBOOK.md#high-api-latency
+
+      - alert: DevFlowWorkerHeartbeatLost
+        expr: max(devflow_workers_online) < 1
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: No DevFlow workers have a fresh heartbeat.
+          runbook_url: https://github.com/OWNER/DevFlow/blob/main/docs/RUNBOOK.md#worker-heartbeat-loss
+
+  - name: devflow-queue
+    rules:
+      - alert: DevFlowQueueBacklog
+        expr: max(devflow_queue_depth) > 50
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: More than 50 jobs are waiting in the DevFlow queue.
+          runbook_url: https://github.com/OWNER/DevFlow/blob/main/docs/RUNBOOK.md#queue-backlog
+
+      - alert: DevFlowQueueLagHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(devflow_task_wait_seconds_bucket[10m])) by (le)
+          ) > 60
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: p95 task wait time exceeds 60 seconds.
+          runbook_url: https://github.com/OWNER/DevFlow/blob/main/docs/RUNBOOK.md#queue-backlog
+
+      - alert: DevFlowDeadLetterJobs
+        expr: max(devflow_queue_dead_letter) > 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Jobs are sitting in the dead-letter queue.
+          runbook_url: https://github.com/OWNER/DevFlow/blob/main/docs/RUNBOOK.md#dead-letter-jobs
+
+      - alert: DevFlowExecutionFailureRate
+        expr: |
+          sum(rate(devflow_executions_total{status="failed"}[15m]))
+            / clamp_min(sum(rate(devflow_executions_total[15m])), 0.001) > 0.2
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: More than 20% of executions are failing.
+          runbook_url: https://github.com/OWNER/DevFlow/blob/main/docs/RUNBOOK.md#high-execution-failure-rate

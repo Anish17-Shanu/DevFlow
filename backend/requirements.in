@@ -1,0 +1,16 @@
+# Direct runtime dependencies for DevFlow.
+# Compile with: pip-compile --generate-hashes requirements.in
+fastapi==0.162.0
+uvicorn==0.54.0
+sqlalchemy==2.1.6
+greenlet==3.5.6
+alembic==1.18.1
+aiosqlite==0.22.1
+asyncpg==0.32.0
+pydantic==2.14.1
+pydantic-settings==2.16.2
+cryptography==46.0.3
+httpx==0.28.1
+prometheus-client==0.24.1
+croniter==6.0.0
+redis==7.1.0

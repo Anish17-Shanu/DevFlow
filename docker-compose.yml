@@ -4,6 +4,18 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+x-api-environment: &api-environment
+  DEVFLOW_DATABASE_URL: postgresql+asyncpg://devflow:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/devflow
+  DEVFLOW_ENVIRONMENT: production
+  DEVFLOW_BOOTSTRAP_API_KEY: ${DEVFLOW_BOOTSTRAP_API_KEY:?DEVFLOW_BOOTSTRAP_API_KEY must be set}
+  DEVFLOW_SECRET_ENCRYPTION_KEY: ${DEVFLOW_SECRET_ENCRYPTION_KEY:?DEVFLOW_SECRET_ENCRYPTION_KEY must be set}
+  DEVFLOW_CORS_ORIGINS: ${DEVFLOW_CORS_ORIGINS:-http://localhost:8080}
+  DEVFLOW_DOCS_ENABLED: "false"
+  DEVFLOW_LOG_LEVEL: ${DEVFLOW_LOG_LEVEL:-INFO}
+  DEVFLOW_RATE_LIMIT_REQUESTS_PER_MINUTE: ${DEVFLOW_RATE_LIMIT_REQUESTS_PER_MINUTE:-600}
+  DEVFLOW_RATE_LIMIT_BURST: ${DEVFLOW_RATE_LIMIT_BURST:-100}
+  DEVFLOW_AUTO_MIGRATE: "false"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -11,7 +23,7 @@ services:
     environment:
       POSTGRES_DB: devflow
       POSTGRES_USER: devflow
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -22,6 +34,26 @@ services:
     logging: *default-logging
     security_opt:
       - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2g
+
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *api-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
 
   api:
     build:
@@ -33,15 +65,13 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DEVFLOW_DATABASE_URL: postgresql+asyncpg://devflow:${POSTGRES_PASSWORD:-devflow}@postgres:5432/devflow
-      DEVFLOW_ENVIRONMENT: production
+      <<: *api-environment
       DEVFLOW_INLINE_WORKERS_ENABLED: "false"
-      DEVFLOW_WORKER_COUNT: "1"
-      DEVFLOW_DOCS_ENABLED: "false"
-      DEVFLOW_CORS_ORIGINS: ${DEVFLOW_CORS_ORIGINS:-http://localhost:8080}
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live')"]
       interval: 20s
@@ -50,6 +80,11 @@ services:
     logging: *default-logging
     security_opt:
       - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1g
 
   worker:
     build:
@@ -60,38 +95,57 @@ services:
     stop_grace_period: 30s
     command: ["python", "-m", "backend.worker_main"]
     environment:
-      DEVFLOW_DATABASE_URL: postgresql+asyncpg://devflow:${POSTGRES_PASSWORD:-devflow}@postgres:5432/devflow
-      DEVFLOW_ENVIRONMENT: production
+      <<: *api-environment
       DEVFLOW_INLINE_WORKERS_ENABLED: "false"
-      DEVFLOW_WORKER_COUNT: "4"
+      DEVFLOW_WORKER_COUNT: ${DEVFLOW_WORKER_COUNT:-4}
+      DEVFLOW_WORKER_INSTANCE_ID: ${DEVFLOW_WORKER_INSTANCE_ID:-}
       DEVFLOW_QUEUE_LEASE_SECONDS: "30"
       DEVFLOW_WORKER_HEARTBEAT_INTERVAL_SECONDS: "5"
-      DEVFLOW_LOG_LEVEL: INFO
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "backend.worker_healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
     logging: *default-logging
     security_opt:
       - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1g
 
   frontend:
     build:
-      context: .
-      dockerfile: frontend/Dockerfile
-      args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api}
-        VITE_WS_BASE_URL: ${VITE_WS_BASE_URL:-ws://localhost:8000}
+      context: ./frontend
+      dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "8080:80"
+      - "8080:8080"
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
     logging: *default-logging
     security_opt:
       - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256m
 
 volumes:
   postgres_data:

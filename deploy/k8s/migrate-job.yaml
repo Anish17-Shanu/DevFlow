@@ -1,0 +1,51 @@
+# Release job: run before rolling out api/worker.
+# Argo CD: sync-wave -1 / PreSync hook. Flux/Helm: pre-upgrade hook or a pipeline step.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: devflow-migrate
+  labels:
+    app.kubernetes.io/name: devflow-migrate
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: devflow-migrate
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: migrate
+          image: devflow-api
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: devflow-config
+            - secretRef:
+                name: devflow-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

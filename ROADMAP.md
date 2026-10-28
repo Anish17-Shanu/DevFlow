@@ -16,15 +16,21 @@ Living checklist for evolving DevFlow from a working workflow engine into a prod
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Backend lint | `ruff check backend` | pass |
-| Backend tests | `python -m pytest` | 15 passed |
-| Frontend build | `npm run build` | pass (158 kB JS) |
-| API boot + seed | `uvicorn backend.main:app` | healthy, 2 workflows seeded |
-| Golden path | Run "ML Training Pipeline" in UI | 4/4 tasks success, 4 workers idle, WS accepted |
-| Runtime panel | Worker Monitor | readiness `ok`, DB `ok`, workers `running`, queue durable |
-| Docker Compose | `docker compose up --build` | **not verified** (Docker daemon unavailable in the verification environment) |
+| Backend lint | `ruff check backend migrations` / `ruff format --check …` | pass |
+| Backend tests (SQLite) | `python -m pytest` | **78 passed, 2 skipped** (Postgres-only tests skipped) |
+| Backend tests + PostgreSQL | `DEVFLOW_TEST_POSTGRES_URL=… python -m pytest --cov=backend` | **80 passed, 79.04% coverage** (threshold 70%) |
+| Frontend unit tests | `npm run test:coverage` | **35 passed** across 5 files; thresholds enforced |
+| Frontend build | `npm run build` | pass |
+| Browser E2E | `npm run test:e2e` | **2 passed**: golden path + 5 responsive widths (360–1440) |
+| Docker Compose | `docker compose up -d --build` | **all 5 services healthy**, migration exited 0, smoke test passed, UI run succeeded in `production` |
+| Kubernetes manifests | `kubectl kustomize deploy/k8s` | valid |
+| API docs drift | `python scripts/generate_api_docs.py --check` | matches OpenAPI |
+| Cross-replica WebSocket | 2 API replicas + 1 worker on PostgreSQL | both clients received the identical event exactly once |
+| Process kill / drain | `pytest backend/tests/test_services.py` | in-flight task completes during shutdown |
 
-Supported runtime: Python **3.12 / 3.13 / 3.14**, Node.js **20+**, PostgreSQL 16, SQLite for local development.
+Supported runtime: Python **3.12 / 3.13 / 3.14**, Node.js **20+**, PostgreSQL 16–17, SQLite for local development.
+
+**Environment caveats:** Kubernetes was validated with `kustomize` only (no live cluster). The staging/production deploy workflow is committed but has not run on GitHub Actions infrastructure from this workstation. Branch protection is a repository setting and is not verifiable from the codebase.
 
 ---
 
@@ -65,158 +71,160 @@ Supported runtime: Python **3.12 / 3.13 / 3.14**, Node.js **20+**, PostgreSQL 16
 
 ## 1. Security
 
-- [ ] **SEC-01 (P0)** — Add authentication (OIDC or signed API keys) to every HTTP and WebSocket route. *Done when:* unauthenticated calls return 401 and tests cover it.
-- [ ] **SEC-02 (P0)** — Add authorization/RBAC (viewer, operator, admin) and per-workflow ownership checks. *Done when:* cross-tenant reads/writes are denied and tested.
-- [ ] **SEC-03 (P0)** — Add tenant isolation (`tenant_id` on all entities, scoped queries, scoped queue stats). *Done when:* two tenants cannot see each other's workflows, executions, logs, or workers.
-- [ ] **SEC-04 (P1)** — Add rate limiting and per-tenant quotas (Redis-backed for multi-replica). *Done when:* burst tests return 429 and limits are configurable.
-- [ ] **SEC-05 (P1)** — Serve the API over TLS with HSTS at an ingress/reverse proxy. *Done when:* HTTP redirects to HTTPS and TLS config is documented.
-- [ ] **SEC-06 (P1)** — Move database credentials and signing keys to a secrets manager; remove defaults from deployment config. *Done when:* no secrets exist in Compose/env files used for production.
-- [ ] **SEC-07 (P2)** — Validate and sandbox task configuration; never execute untrusted config as code. *Done when:* task handlers receive only allowlisted fields.
-- [ ] **SEC-08 (P2)** — Add WAF/security-group rules and network policies between API, worker, and database. *Done when:* database is unreachable from outside the private network.
-- [ ] **SEC-09 (P2)** — Add dependency and container vulnerability scanning to CI with a documented SLA. *Done when:* scans run on every PR and block high/critical findings.
-- [ ] **SEC-10 (P2)** — Authenticate WebSocket connections and authorize per execution. *Done when:* an unauthorized socket cannot subscribe and is closed with 1008.
-- [ ] **SEC-11 (P3)** — Add audit logging for privileged actions (workflow create/run/cancel, config changes). *Done when:* audit events are append-only and queryable.
+- [x] **SEC-01 (P0)** — Hashed API keys on every HTTP/WebSocket route; bootstrap key in development. *Evidence:* `backend/api/dependencies.py`, `backend/tests/test_auth_api.py` (401/403 cases).
+- [x] **SEC-02 (P0)** — RBAC viewer/operator/admin plus tenant-scoped repository queries. *Evidence:* cross-tenant 404s in `test_workflows_api.py`, `test_executions_api.py`, `test_realtime.py`.
+- [x] **SEC-03 (P0)** — `tenant_id` on all entities; scoped workflow, execution, log, queue, worker and audit queries. *Evidence:* two-tenant API tests and admin auth-key isolation.
+- [x] **SEC-04 (P1)** — Token-bucket rate limiting with in-memory and Redis backends, configurable per key. *Evidence:* `backend/core/rate_limit.py`, 429 test with `Retry-After`.
+- [x] **SEC-05 (P1)** — TLS with forced redirect and cert-manager annotations in `deploy/k8s/ingress.yaml`; HSTS emitted in production. *Evidence:* ingress manifest + `Strict-Transport-Security` in `backend/main.py`.
+- [x] **SEC-06 (P1)** — No production secrets in the repo: Compose requires env, K8s uses a Secret, production settings reject defaults. *Evidence:* `docker-compose.yml` required vars, `secret.example.yaml`, config validator.
+- [x] **SEC-07 (P2)** — Handlers validate typed config fields; no arbitrary code execution path. *Evidence:* `backend/handlers/builtin.py`, config validation tests.
+- [x] **SEC-08 (P2)** — Default-deny NetworkPolicy limits API/worker/Postgres ingress. *Evidence:* `deploy/k8s/networkpolicy.yaml`.
+- [x] **SEC-09 (P2)** — Trivy scans block HIGH/CRITICAL findings; SBOM generated per CI run. *Evidence:* `docker` job in `.github/workflows/ci.yml`.
+- [x] **SEC-10 (P2)** — WebSocket authentication plus per-execution tenant authorization, close code 1008. *Evidence:* `backend/tests/test_realtime.py` (5 socket tests).
+- [x] **SEC-11 (P3)** — Append-only audit events for privileged actions, exposed via `GET /api/v1/audit`. *Evidence:* `backend/services/audit_service.py`, `ops_routes.py`, `test_ops_api.py`.
 
 ## 2. Reliability & data integrity
 
-- [ ] **REL-01 (P0)** — Replace ad-hoc `MigrationService` with Alembic migrations run as a one-off release job. *Done when:* schema changes are versioned and no service calls `create_all` in production.
-- [ ] **REL-02 (P0)** — Add bounded retries for jobs orphaned by worker crashes. *Done when:* a task that repeatedly kills workers reaches a terminal failed state instead of retrying forever.
-- [ ] **REL-03 (P1)** — Add a dead-letter state for terminal queue failures with operator visibility. *Done when:* failed jobs are queryable and replayable.
-- [ ] **REL-04 (P1)** — Add a watchdog that marks executions/tasks orphaned by dead workers and finalizes them. *Done when:* a killed worker never leaves an execution `running` indefinitely.
-- [ ] **REL-05 (P1)** — Implement graceful worker drain: stop claiming, finish in-flight tasks within the grace period, then exit. *Done when:* deploys do not requeue active tasks.
-- [ ] **REL-06 (P1)** — Add idempotency keys for `POST /workflows/{id}/run` to prevent duplicate executions on retries. *Done when:* repeating a request with the same key returns the original execution.
-- [ ] **REL-07 (P1)** — Add retention and cleanup jobs for logs, completed queue records, and stale worker records. *Done when:* retention is configurable and covered by tests.
-- [ ] **REL-08 (P1)** — Set database connection pool sizing/timeouts and document capacity per replica. *Done when:* load tests show stable pool usage at target concurrency.
-- [ ] **REL-09 (P2)** — Add transactional outbox or equivalent so execution state and broadcasts cannot diverge. *Done when:* no lost-update window between commit and notification remains.
-- [ ] **REL-10 (P2)** — Add automated Postgres backups with point-in-time recovery and a restore drill. *Done when:* a documented restore meets the RPO/RTO targets.
-- [ ] **REL-11 (P2)** — Add task-level timeout/watchdog independent of the queue lease. *Done when:* hung tasks fail deterministically.
-- [ ] **REL-12 (P3)** — Add graceful API shutdown draining active requests before exit. *Done when:* rolling deploys produce zero client 5xx spikes.
+- [x] **REL-01 (P0)** — Alembic migrations with a one-off release job; production rejects `auto_migrate`. *Evidence:* `migrations/`, Compose `migrate` service exited 0, `validate_production_settings`.
+- [x] **REL-02 (P0)** — Bounded retries via poison-attempt accounting; repeated crashes reach terminal failure. *Evidence:* `queue_poison_max_attempts`, `test_database_queue.py`.
+- [x] **REL-03 (P1)** — Dead-letter state with listing and replay endpoints. *Evidence:* `test_ops_api.py`, `test_database_queue.py`.
+- [x] **REL-04 (P1)** — Watchdog reclaims expired leases and finalizes orphaned executions/tasks. *Evidence:* `watchdog_service.py`, `test_services.py`.
+- [x] **REL-05 (P1)** — Graceful worker drain: stop claiming, finish in-flight work, then exit. *Evidence:* `test_worker_shutdown_drains_inflight_task`.
+- [x] **REL-06 (P1)** — Idempotency keys on workflow runs return the original execution. *Evidence:* `test_executions_api.py`.
+- [x] **REL-07 (P1)** — Configurable retention for logs, executions, queue and worker rows. *Evidence:* `test_retention.py`.
+- [x] **REL-08 (P1)** — Pool sizing/timeouts documented and load-tested. *Evidence:* [docs/CAPACITY.md](docs/CAPACITY.md), `test_postgres_integration.py`.
+- [x] **REL-09 (P2)** — Transactional outbox drives execution notifications, so state and broadcast cannot diverge. *Evidence:* `outbox_service.py`, `outbox_notifier_service.py`, notifier recovery test.
+- [~] **REL-10 (P2)** — Logical backup/restore scripts and drill procedure exist; continuous WAL archiving/PITR is documented as the RPO 15 min mechanism but must be enabled by the platform. *Evidence:* `scripts/backup_postgres.sh`, `scripts/restore_postgres.sh`, [docs/RUNBOOK.md](docs/RUNBOOK.md#backup-and-restore-drill).
+- [x] **REL-11 (P2)** — Independent task timeout watchdog fails hung tasks deterministically. *Evidence:* `max_task_timeout_seconds`, `watchdog_service.py`.
+- [~] **REL-12 (P3)** — Lifespan shutdown drains services and workers within the orchestrator grace period; zero-5xx rolling-deploy behavior is not measured yet.
 
 ## 3. Queue & worker runtime
 
-- [ ] **QUE-01 (P0)** — Use `SELECT ... FOR UPDATE SKIP LOCKED` (or equivalent) for claims on Postgres. *Done when:* contention tests with many workers show no duplicate execution.
-- [ ] **QUE-02 (P1)** — Give worker instances unique IDs (hostname/replica suffix) so scaling does not collide on `worker-1..N`. *Done when:* two worker replicas both appear in monitoring.
-- [ ] **QUE-03 (P1)** — Add per-workflow and global concurrency limits. *Done when:* limits are enforced and surfaced in the API.
-- [ ] **QUE-04 (P1)** — Add fair scheduling or priority aging so low-priority work cannot starve. *Done when:* a long low-priority backlog still drains.
-- [ ] **QUE-05 (P1)** — Add a real task-handler registry (pluggable callables by task type) instead of simulated sleeps. *Done when:* at least one real handler type runs through the same lifecycle.
-- [ ] **QUE-06 (P2)** — Add queue backend abstraction with a Redis/SQS implementation behind the existing interface. *Done when:* queue tests run against two backends.
-- [ ] **QUE-07 (P2)** — Add poison-job detection (same job repeatedly requeued) with quarantine. *Done when:* a poison job is quarantined and alerted.
-- [ ] **QUE-08 (P2)** — Add delayed/scheduled jobs and cron-style triggers. *Done when:* a recurring workflow can be configured and observed.
-- [ ] **QUE-09 (P2)** — Emit task duration, wait time, and retry metrics per worker. *Done when:* metrics back a dashboard.
-- [ ] **QUE-10 (P3)** — Add queue sharding/partitioning plan for growth beyond a single Postgres queue table. *Done when:* capacity model and migration path are documented.
+- [x] **QUE-01 (P0)** — `SELECT … FOR UPDATE SKIP LOCKED` claims; four-worker contention test proves no duplicate execution. *Evidence:* `test_parallel_claims_never_duplicate_on_postgres`.
+- [x] **QUE-02 (P1)** — Unique worker instance IDs (host/replica suffix). *Evidence:* `backend/workers/heartbeat.py`, `worker_main.py`, readiness test.
+- [x] **QUE-03 (P1)** — Per-workflow and per-tenant concurrency limits with 429/queue backpressure. *Evidence:* `max_concurrent_tasks_per_workflow`, `max_concurrent_executions_per_tenant`, tests.
+- [x] **QUE-04 (P1)** — Priority aging prevents low-priority starvation. *Evidence:* `queue_aging_seconds`, queue tests.
+- [x] **QUE-05 (P1)** — Pluggable task-handler registry. *Evidence:* `backend/handlers/registry.py`, `builtin.py` (sleep/echo/http/fail).
+- [ ] **QUE-06 (P2)** — Queue backend abstraction with Redis/SQS implementation. Only the durable database backend exists.
+- [x] **QUE-07 (P2)** — Poison-job detection with quarantine and dead-letter visibility. *Evidence:* queue tests.
+- [x] **QUE-08 (P2)** — Delayed jobs and cron-style scheduled workflows. *Evidence:* `scheduler_service.py`, `test_services.py`.
+- [x] **QUE-09 (P2)** — Task wait/duration/retry metrics per worker. *Evidence:* `backend/core/metrics.py`, Grafana dashboard.
+- [ ] **QUE-10 (P3)** — Queue sharding/partitioning plan. Not designed; single-table queue is within measured capacity.
 
 ## 4. API & contracts
 
-- [ ] **API-01 (P0)** — Add `GET /api/executions` with pagination, status filter, and workflow filter. *Done when:* the UI can list history without knowing IDs.
-- [ ] **API-02 (P0)** — Add `POST /api/executions/{id}/cancel` and `POST /api/executions/{id}/retry`. *Done when:* cancellation stops pending work and is audited.
-- [ ] **API-03 (P1)** — Paginate `GET /api/workflows` and document all list contracts. *Done when:* large tenants do not receive unbounded payloads.
-- [ ] **API-04 (P1)** — Add `PATCH`/`DELETE` for workflows with versioning or immutable revisions. *Done when:* edits do not mutate in-flight executions.
-- [ ] **API-05 (P1)** — Version the API (`/api/v1`) and publish a deprecation policy. *Done when:* breaking changes can ship without client breakage.
-- [ ] **API-06 (P1)** — Standardize error payloads (`code`, `message`, `request_id`, `details`) across 4xx/5xx. *Done when:* clients parse one error shape.
-- [ ] **API-07 (P2)** — Generate typed clients from OpenAPI and add contract tests. *Done when:* CI fails on an accidental breaking schema change.
-- [ ] **API-08 (P2)** — Add cursor pagination for logs (offset becomes expensive at scale). *Done when:* log paging is stable under concurrent inserts.
-- [ ] **API-09 (P2)** — Return queue/database health explicitly instead of zeroed stats when queries fail. *Done when:* readiness and queue endpoints expose degradation.
-- [ ] **API-10 (P3)** — Add bulk workflow import/export (JSON/YAML). *Done when:* round-trip import preserves DAG and config.
+- [x] **API-01 (P0)** — Paginated execution history with status/workflow filters. *Evidence:* `GET /api/v1/executions`, `test_executions_api.py`.
+- [x] **API-02 (P0)** — Cancel and retry endpoints with audit events. *Evidence:* `execution_routes.py`, API tests.
+- [x] **API-03 (P1)** — Paginated workflow listing with search/archive filters. *Evidence:* `test_workflows_api.py`.
+- [x] **API-04 (P1)** — Workflow update/delete/clone with immutable execution snapshots and revision numbers. *Evidence:* `workflow_service.py`, `test_executions_api.py` (snapshot uses revision).
+- [x] **API-05 (P1)** — Versioned `/api/v1` prefix. *Evidence:* `settings.api_prefix`, OpenAPI docs.
+- [x] **API-06 (P1)** — One error envelope (`code`, `message`, `request_id`, `details`) on 4xx/5xx. *Evidence:* `backend/main.py` exception handlers, API tests.
+- [ ] **API-07 (P2)** — Generated typed clients and contract tests. API.md drift check exists; generated clients do not.
+- [ ] **API-08 (P2)** — Cursor pagination for logs. Offset pagination only.
+- [x] **API-09 (P2)** — Queue/readiness expose `error` and `healthy: false` instead of zeros. *Evidence:* `QueueStats`, readiness response.
+- [ ] **API-10 (P3)** — Bulk workflow import/export. Not implemented.
 
 ## 5. Frontend & UX
 
-- [ ] **UI-01 (P1)** — Add a top-level React error boundary with a recoverable fallback. *Done when:* a render error does not blank the app.
-- [ ] **UI-02 (P1)** — Add client-side validation and inline errors for the workflow builder (duplicates, unknown dependencies, numeric bounds). *Done when:* mistakes are caught before submit.
-- [ ] **UI-03 (P1)** — Add execution history list, filters, and links from the dashboard. *Done when:* users can inspect past runs without an ID.
-- [ ] **UI-04 (P1)** — Add loading, empty, and error states for every panel. *Done when:* slow/failed APIs never look like empty data.
-- [ ] **UI-05 (P1)** — Audit responsive layouts at 360, 390, 768, 1024, and 1440 px with screenshots. *Done when:* no horizontal scroll or clipped controls.
-- [ ] **UI-06 (P2)** — Add URL routing (deep links to executions/pages) instead of local tab state. *Done when:* refreshing or sharing a URL restores the view.
-- [ ] **UI-07 (P2)** — Visualize DAG edges, not just task cards. *Done when:* dependencies are traceable in the graph view.
-- [ ] **UI-08 (P2)** — Add accessibility pass (labels, focus states, contrast, keyboard navigation) with axe checks. *Done when:* automated a11y checks pass with no critical issues.
-- [ ] **UI-09 (P2)** — Add frontend unit/component tests (Vitest + Testing Library). *Done when:* core pages and API error paths are covered.
-- [ ] **UI-10 (P3)** — Add confirmation dialogs for destructive/expensive actions (run, cancel, delete). *Done when:* no accidental destructive action is one click away.
-- [ ] **UI-11 (P3)** — Add i18n scaffolding if multi-language is a requirement. *Done when:* strings are externalized and a second locale renders.
+- [x] **UI-01 (P1)** — Top-level error boundary with recoverable fallback. *Evidence:* `ErrorBoundary.jsx`, component test.
+- [x] **UI-02 (P1)** — Builder validation for duplicates, unknown dependencies, bounds. *Evidence:* `WorkflowBuilderPage.jsx`, pages tests.
+- [x] **UI-03 (P1)** — Execution history with filters and workflow links. *Evidence:* `ExecutionsPage.jsx`, E2E golden path.
+- [x] **UI-04 (P1)** — Loading, empty and error states on every panel. *Evidence:* `EmptyState.jsx`, page tests.
+- [x] **UI-05 (P1)** — Responsive audit at 360/390/768/1024/1440 with committed screenshots. *Evidence:* `frontend/e2e/responsive.spec.js`, `docs/screenshots/`.
+- [x] **UI-06 (P2)** — Hash routing with deep links to workflows, executions and panels. *Evidence:* `src/lib/router.js`, `App.jsx`.
+- [x] **UI-07 (P2)** — DAG edges rendered, not just cards. *Evidence:* `TaskGraph.jsx`, component tests.
+- [ ] **UI-08 (P2)** — Automated axe accessibility checks. Not wired into CI.
+- [x] **UI-09 (P2)** — Vitest + Testing Library coverage of pages and API error paths. *Evidence:* 35 tests across 5 files.
+- [x] **UI-10 (P3)** — Confirmation dialogs for run/archive/delete. *Evidence:* `ConfirmDialog.jsx`, verified in live UI ("Start a new run?").
+- [ ] **UI-11 (P3)** — i18n scaffolding. Not implemented; single locale by design.
 
 ## 6. Observability
 
-- [ ] **OBS-01 (P0)** — Emit structured JSON logs with request/execution/task/worker IDs. *Done when:* logs can be filtered by correlation ID.
-- [ ] **OBS-02 (P0)** — Expose Prometheus metrics (`/metrics`) for requests, queue depth, job latency, retries, worker states. *Done when:* a dashboard shows all golden signals.
-- [ ] **OBS-03 (P1)** — Propagate `X-Request-ID` into logs and responses end to end. *Done when:* one ID traces API → queue → worker.
-- [ ] **OBS-04 (P1)** — Add OpenTelemetry tracing across API, queue, and worker. *Done when:* a single execution produces one trace.
-- [ ] **OBS-05 (P1)** — Define SLOs and alerts (API latency/error rate, queue lag, execution failure rate, worker heartbeat loss). *Done when:* alerts page on SLO burn.
-- [ ] **OBS-06 (P1)** — Add health/readiness dashboards and runbook links in alert annotations. *Done when:* each alert links to an actionable runbook.
-- [ ] **OBS-07 (P2)** — Add log retention/search and PII scrubbing. *Done when:* logs contain no secrets/PII and retention is enforced.
-- [ ] **OBS-08 (P2)** — Add worker/queue diagnostics endpoint for support (last errors, lease state). *Done when:* support can diagnose without DB access.
+- [x] **OBS-01 (P0)** — Structured JSON logs with request/execution/task/worker correlation. *Evidence:* `backend/core/logging.py`, `context.py`.
+- [x] **OBS-02 (P0)** — Prometheus metrics and Grafana dashboard for golden signals. *Evidence:* `/metrics`, `deploy/observability/`.
+- [x] **OBS-03 (P1)** — `X-Request-ID` echoed, logged and bound into worker execution context. *Evidence:* middleware + execution service.
+- [~] **OBS-04 (P1)** — Optional OTel FastAPI/HTTPX/SQLAlchemy instrumentation exists; worker spans are not yet linked into one execution trace.
+- [x] **OBS-05 (P1)** — Seven SLO alerts on latency, errors, queue lag, failure rate and heartbeat loss. *Evidence:* `deploy/observability/alerts.yml`.
+- [x] **OBS-06 (P1)** — Alert annotations link to actionable runbook sections. *Evidence:* `docs/RUNBOOK.md`.
+- [~] **OBS-07 (P2)** — Log retention is enforced; no dedicated PII scrubbing/search stack (operator-provided).
+- [x] **OBS-08 (P2)** — Operations endpoints expose worker state, dead letters and audit without DB access. *Evidence:* `ops_routes.py`, `test_ops_api.py`.
 
 ## 7. Testing & QA
 
-- [ ] **TEST-01 (P0)** — Add end-to-end browser tests (Playwright) for create → run → dashboard → logs. *Done when:* CI runs the golden path against the built stack.
-- [ ] **TEST-02 (P1)** — Add Postgres-backed integration tests (not only SQLite). *Done when:* CI runs the suite against Postgres 16.
-- [ ] **TEST-03 (P1)** — Add concurrency tests: multiple workers claiming, lease expiry, duplicate prevention. *Done when:* claim races are proven safe.
-- [ ] **TEST-04 (P1)** — Enforce coverage thresholds (backend and frontend). *Done when:* CI fails below the agreed threshold.
-- [ ] **TEST-05 (P2)** — Add load tests (k6/Locust) for API and worker throughput. *Done when:* capacity numbers are documented from evidence.
-- [ ] **TEST-06 (P2)** — Add chaos tests (kill worker/API/DB mid-execution) and recovery assertions. *Done when:* documented recovery paths pass.
-- [ ] **TEST-07 (P2)** — Add tests for WebSocket auth/reconnect and notifier failure recovery. *Done when:* these paths are covered.
-- [ ] **TEST-08 (P3)** — Add mutation testing for critical DAG/queue logic. *Done when:* mutation score meets the target.
+- [x] **TEST-01 (P0)** — Playwright golden path in CI (create → run → dashboard → logs). *Evidence:* `frontend/e2e/golden-path.spec.js`, CI `e2e` job; 2/2 passing locally.
+- [x] **TEST-02 (P1)** — PostgreSQL 16 integration job in CI and local run. *Evidence:* `test_postgres_integration.py`, CI `postgres` job, 80-test Postgres run.
+- [x] **TEST-03 (P1)** — Concurrency, lease-expiry and duplicate-prevention tests. *Evidence:* queue and worker tests.
+- [x] **TEST-04 (P1)** — Backend 70% and frontend coverage thresholds enforced. *Evidence:* `pytest.ini`, `vitest.config.js` (backend measured 79.04%).
+- [x] **TEST-05 (P2)** — Load probes and measured capacity table. *Evidence:* `scripts/load_test.py`, [docs/CAPACITY.md](docs/CAPACITY.md).
+- [~] **TEST-06 (P2)** — Recovery tests cover worker shutdown with in-flight work and notifier poll failures; killing Postgres/API mid-execution is not automated.
+- [x] **TEST-07 (P2)** — WebSocket auth/reconnect and notifier failure recovery tests. *Evidence:* `test_realtime.py`, `pages.test.jsx`, `test_services.py`.
+- [ ] **TEST-08 (P3)** — Mutation testing. Not configured.
 
 ## 8. CI/CD & supply chain
 
-- [ ] **CI-01 (P0)** — Build Docker images in CI (api/worker/frontend) on every PR. *Done when:* image builds are gated.
-- [ ] **CI-02 (P1)** — Add lockfiles with hashes (`pip-compile --generate-hashes` or uv) and automated dependency updates (Dependabot/Renovate). *Done when:* installs are reproducible and update PRs are automated.
-- [ ] **CI-03 (P1)** — Add SBOM generation and image signing (e.g., cosign). *Done when:* releases ship verifiable artifacts.
-- [ ] **CI-04 (P1)** — Add a staging deploy pipeline with smoke tests before production. *Done when:* production promotion requires a green staging run.
-- [ ] **CI-05 (P2)** — Add database migration check to the deploy pipeline. *Done when:* incompatible migrations fail before rollout.
-- [ ] **CI-06 (P2)** — Add branch protection, required reviews, CODEOWNERS, and PR template. *Done when:* main cannot be pushed without review/CI.
-- [ ] **CI-07 (P2)** — Add release versioning and changelog automation. *Done when:* every release is tagged with generated notes.
+- [x] **CI-01 (P0)** — API and frontend images build and are scanned on every PR. *Evidence:* CI `docker` job runs after backend/frontend gates.
+- [x] **CI-02 (P1)** — Hashed lockfiles installed with `--require-hashes`; Dependabot groups weekly pip/npm/actions/docker updates. *Evidence:* `backend/requirements*.lock`, `.github/dependabot.yml`.
+- [x] **CI-03 (P1)** — SBOM artifact per build; release images signed with cosign keyless. *Evidence:* CI `docker` and `release` jobs, `deploy.yml`.
+- [~] **CI-04 (P1)** — Staging→production deploy workflow with smoke test and environment gate is committed but has not executed on GitHub runners.
+- [x] **CI-05 (P2)** — Deploy runs Alembic as a release job and waits for completion before rollout. *Evidence:* Compose `migrate`, `deploy.yml` migration job handling.
+- [~] **CI-06 (P2)** — CODEOWNERS and PR template are present; branch protection/review requirements are repository settings and were not changed.
+- [x] **CI-07 (P2)** — `v*` tags build/push images and create a GitHub release with generated notes. *Evidence:* CI `release` job.
 
 ## 9. Infrastructure & deployment
 
-- [ ] **INF-01 (P0)** — Verify `docker compose up --build` end to end (currently unverified). *Done when:* all four services are healthy and the golden path passes in containers.
-- [ ] **INF-02 (P0)** — Add a production deployment target (Kubernetes/ECS) with Ingress/TLS, HPA, PDB, resource requests/limits, and network policies. *Done when:* a production-like environment runs the stack.
-- [ ] **INF-03 (P1)** — Add worker container health/readiness (heartbeat or admin port). *Done when:* orchestrators can detect a dead worker.
-- [ ] **INF-04 (P1)** — Add Compose/K8s resource limits and log rotation for all services. *Done when:* no container can exhaust the host.
-- [ ] **INF-05 (P1)** — Make the Postgres volume durable, backed up, and monitored. *Done when:* disk growth and backup success are alerted.
-- [ ] **INF-06 (P2)** — Add a reverse proxy/ingress serving the UI and API under one origin. *Done when:* CORS is unnecessary in production.
-- [ ] **INF-07 (P2)** — Document disaster recovery (RPO/RTO, restore steps, ownership). *Done when:* a restore drill has been executed.
-- [ ] **INF-08 (P2)** — Add environment separation (dev/staging/prod) with isolated databases and secrets. *Done when:* no shared state across environments.
-- [ ] **INF-09 (P3)** — Add cost/usage guardrails and autoscaling policies for workers. *Done when:* scale-out follows queue lag.
+- [x] **INF-01 (P0)** — `docker compose up --build` verified end to end. *Evidence:* PostgreSQL, migrate (exit 0), API, worker and frontend all healthy; `scripts/smoke_test.sh` passed; golden path run succeeded through the containerized UI.
+- [~] **INF-02 (P0)** — Kubernetes manifests (Ingress/TLS, HPA, PDB, resources, NetworkPolicy) render with `kustomize`; no live production-like cluster was available to run them.
+- [x] **INF-03 (P1)** — Dedicated worker heartbeat health check; Compose reports the worker healthy. *Evidence:* `backend/worker_healthcheck.py`, `docker compose ps`.
+- [x] **INF-04 (P1)** — Resource limits, init/grace periods and log rotation on every service. *Evidence:* `docker-compose.yml`, K8s manifests.
+- [~] **INF-05 (P1)** — Durable Postgres volume plus backup/restore scripts; backup-success alerting depends on platform monitoring.
+- [x] **INF-06 (P2)** — Nginx serves UI and proxies `/api`, `/ws`, `/health`, `/metrics` on one origin. *Evidence:* `frontend/nginx.conf`, verified at `http://127.0.0.1:18080`.
+- [~] **INF-07 (P2)** — DR objectives, escalate/restore steps documented; no restore drill was executed in this pass.
+- [~] **INF-08 (P2)** — Staging and production GitHub Environments with separate secrets are defined; K8s ships one overlay, so full environment isolation is deployment-owned.
+- [~] **INF-09 (P3)** — Worker autoscaling guidance (KEDA queue-lag trigger) documented; not deployed.
 
 ## 10. Docs & governance
 
-- [ ] **DOC-01 (P1)** — Add `LICENSE` and finalize ownership/attribution terms. *Done when:* the repository has an explicit license.
-- [ ] **DOC-02 (P1)** — Add `SECURITY.md` (vulnerability reporting, supported versions). *Done when:* the process is published.
-- [ ] **DOC-03 (P1)** — Add architecture decision records (ADRs) for queue, realtime, and storage choices. *Done when:* major decisions have dated records.
-- [ ] **DOC-04 (P1)** — Document SLOs, on-call expectations, and escalation. *Done when:* the runbook covers detection → mitigation.
-- [ ] **DOC-05 (P2)** — Keep [docs/API.md](docs/API.md) generated/validated against OpenAPI. *Done when:* docs drift fails CI.
-- [ ] **DOC-06 (P2)** — Add a production deployment checklist distinct from this roadmap. *Done when:* releases follow a repeatable gate list.
-- [ ] **DOC-07 (P3)** — Add screenshots/GIFs and a demo script to the README. *Done when:* a new user can evaluate the project in one minute.
+- [x] **DOC-01 (P1)** — MIT license and attribution. *Evidence:* `LICENSE`.
+- [x] **DOC-02 (P1)** — Vulnerability reporting and supported versions. *Evidence:* `SECURITY.md`.
+- [x] **DOC-03 (P1)** — Dated ADRs for queue, realtime and storage. *Evidence:* `docs/adr/`.
+- [x] **DOC-04 (P1)** — SLOs, error-budget policy, escalation and runbook. *Evidence:* `docs/RUNBOOK.md`.
+- [x] **DOC-05 (P2)** — API reference validated against OpenAPI in CI. *Evidence:* `scripts/generate_api_docs.py --check` passes.
+- [x] **DOC-06 (P2)** — Release gate checklist separate from this roadmap. *Evidence:* `docs/PRODUCTION_CHECKLIST.md`.
+- [x] **DOC-07 (P3)** — Screenshots, quickstart and API tour in the README. *Evidence:* `README.md`, `docs/screenshots/`.
 
 ## 11. Product features
 
-- [ ] **FEAT-01 (P1)** — Workflow editing, cloning, and deletion with immutable execution snapshots. *Done when:* edits never mutate running executions.
-- [ ] **FEAT-02 (P1)** — Execution history, search, and comparison. *Done when:* users can diff two runs.
-- [ ] **FEAT-03 (P1)** — Manual task retry and skip from the UI. *Done when:* operators can recover a single failed branch.
-- [ ] **FEAT-04 (P2)** — Real task types (HTTP, SQL, shell, container) with typed config. *Done when:* each type has validation and tests.
-- [ ] **FEAT-05 (P2)** — Secrets references in task config (never stored in plaintext). *Done when:* configs reference secret IDs only.
-- [ ] **FEAT-06 (P2)** — Notifications/webhooks on execution success/failure. *Done when:* delivery is retried and observable.
-- [ ] **FEAT-07 (P2)** — Workflow templates and a sample gallery. *Done when:* new users can start from a template.
-- [ ] **FEAT-08 (P3)** — Multi-step approval gates and manual checkpoints. *Done when:* an execution can pause for approval.
+- [x] **FEAT-01 (P1)** — Workflow edit/clone/archive with immutable execution snapshots. *Evidence:* workflow API and revision tests.
+- [~] **FEAT-02 (P1)** — Execution history and filtering exist; side-by-side run comparison is not implemented.
+- [x] **FEAT-03 (P1)** — Per-task retry and skip from the UI. *Evidence:* execution detail page, API tests.
+- [~] **FEAT-04 (P2)** — Real HTTP/sleep/echo/fail handlers with typed config; SQL, shell and container handlers are intentionally not included.
+- [x] **FEAT-05 (P2)** — `{{secret:name}}` references resolved from encrypted secret storage. *Evidence:* `secret_service.py`, handler tests.
+- [x] **FEAT-06 (P2)** — HMAC-signed webhooks with retries and delivery records. *Evidence:* `webhook_service.py`, tests.
+- [x] **FEAT-07 (P2)** — Template gallery creates editable workflows. *Evidence:* `backend/sample_data/templates.py`, verified in live UI.
+- [ ] **FEAT-08 (P3)** — Approval gates/manual checkpoints. Not implemented.
 
 ## 12. Scale & architecture
 
-- [ ] **SCALE-01 (P1)** — Document capacity targets (workflows/day, concurrent tasks, queue depth) and validate with load tests. *Done when:* targets are measured, not estimated.
-- [ ] **SCALE-02 (P2)** — Move WebSocket fan-out to a shared bus (Redis pub/sub or Postgres LISTEN/NOTIFY) for multiple API replicas. *Done when:* clients connected to different replicas receive the same events.
-- [ ] **SCALE-03 (P2)** — Partition/archive queue and log tables as volume grows. *Done when:* query latency stays within SLO after archival.
-- [ ] **SCALE-04 (P2)** — Add read replicas or caching for dashboard queries. *Done when:* read load does not contend with worker writes.
-- [ ] **SCALE-05 (P3)** — Evaluate a dedicated broker (Redis Streams, SQS, Kafka) if Postgres queue throughput becomes the bottleneck. *Done when:* a benchmark-backed decision is recorded.
-- [ ] **SCALE-06 (P3)** — Multi-region/DR topology design. *Done when:* failover is tested and documented.
+- [x] **SCALE-01 (P1)** — Measured capacity table with methodology and caveats. *Evidence:* [docs/CAPACITY.md](docs/CAPACITY.md).
+- [x] **SCALE-02 (P2)** — Shared Postgres `LISTEN/NOTIFY` bus for cross-replica WebSocket fan-out. *Evidence:* `test_realtime_bus_fans_out_across_replicas`; live two-replica run delivered the same event once to a client on each replica.
+- [ ] **SCALE-03 (P2)** — Queue/log partitioning and archival. Not implemented.
+- [ ] **SCALE-04 (P2)** — Read replicas or dashboard caching. Not implemented.
+- [ ] **SCALE-05 (P3)** — Broker evaluation. Not started; Postgres queue is within measured capacity.
+- [ ] **SCALE-06 (P3)** — Multi-region/DR topology. Not designed.
 
 ---
 
 ## Definition of done for "production-grade"
 
-All P0 items are `[x]`, and:
+All P0 items are `[x]` except **INF-02**, which is `[~]`: manifests validate, but no live production-like cluster was available. The remaining condition is an operational environment check, not missing code.
 
 1. Every request and socket is authenticated, authorized, and tenant-scoped.
 2. Schema changes ship through versioned migrations; no runtime `create_all`.
 3. Crashed workers, poison jobs, and hung tasks reach a terminal, visible state.
 4. Metrics, structured logs, traces, SLOs, and alerts exist for API and workers.
 5. CI builds images, runs backend + Postgres + E2E tests, lints, scans, and signs artifacts.
+
+**Next candidates (all P2/P3, tracked above):** QUE-06, QUE-10, API-07/08/10, UI-08/11, TEST-08, FEAT-08, SCALE-03/04/05/06, plus live-cluster verification for INF-02 and a real restore drill for REL-10/INF-07.
 6. A production deployment target runs with TLS, resource limits, backups, and a tested restore.
 7. Security, licensing, ADRs, and on-call documentation are published.
 

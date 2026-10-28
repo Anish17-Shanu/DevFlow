@@ -1,20 +1,25 @@
-from sqlalchemy import inspect, text
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+from alembic import command
+from alembic.config import Config
+
+from backend.core.config import settings
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
 
 
 class MigrationService:
     @staticmethod
-    def apply(sync_connection) -> None:
-        inspector = inspect(sync_connection)
-        table_names = set(inspector.get_table_names())
+    async def upgrade() -> None:
+        await asyncio.to_thread(MigrationService._upgrade_sync)
 
-        if "executions" in table_names:
-            columns = {column["name"] for column in inspector.get_columns("executions")}
-            if "updated_at" not in columns:
-                sync_connection.execute(text("ALTER TABLE executions ADD COLUMN updated_at TIMESTAMP"))
-                sync_connection.execute(
-                    text(
-                        "UPDATE executions "
-                        "SET updated_at = COALESCE(finished_at, started_at, created_at) "
-                        "WHERE updated_at IS NULL"
-                    )
-                )
+    @staticmethod
+    def _upgrade_sync() -> None:
+        config = Config(str(ROOT_DIR / "alembic.ini"))
+        config.set_main_option("script_location", str(ROOT_DIR / "migrations"))
+        config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
+        config.attributes["skip_logging"] = True
+        command.upgrade(config, "head")

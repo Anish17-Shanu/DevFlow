@@ -8,11 +8,11 @@ from backend.services.workflow_service import WorkflowService
 
 class SeedService:
     @staticmethod
-    async def seed_default_workflows(session) -> None:
-        count = await session.scalar(select(func.count()).select_from(Workflow))
+    async def seed_default_workflows(session, tenant_id: str) -> None:
+        count = await session.scalar(select(func.count()).select_from(Workflow).where(Workflow.tenant_id == tenant_id))
         if count and count > 0:
             return
 
         service = WorkflowService(session)
         for workflow in SAMPLE_WORKFLOWS:
-            await service.create_workflow(WorkflowCreate(**workflow))
+            await service.create_workflow(tenant_id, WorkflowCreate(**workflow), actor="seed")

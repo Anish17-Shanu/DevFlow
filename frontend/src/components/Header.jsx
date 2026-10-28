@@ -1,38 +1,53 @@
-export default function Header({ activePage, setActivePage, health, readiness, onRefresh, isRefreshing }) {
-  const pages = [
-    { id: "builder", label: "Workflow Builder" },
-    { id: "executions", label: "Execution Dashboard" },
-    { id: "logs", label: "Logs View" },
-    { id: "workers", label: "Worker Monitor" }
-  ];
+import StatusPill from "./StatusPill";
+
+const NAV = [
+  { name: "workflows", label: "Workflows", href: "#/workflows" },
+  { name: "executions", label: "Executions", href: "#/executions" },
+  { name: "monitor", label: "Monitor", href: "#/monitor" },
+  { name: "operations", label: "Operations", href: "#/operations", adminOnly: true }
+];
+
+export default function Header({ routeName, me, health, readiness, onRefresh, isRefreshing, onLogout }) {
   const platformStatus = readiness?.status || health?.status || "unknown";
+  const isAdmin = me?.role === "admin";
 
   return (
     <header className="shell-header">
-      <div>
-        <p className="eyebrow">Distributed Workflow & Job Processing Engine | Created by Anish Kumar</p>
-        <h1>DevFlow</h1>
+      <div className="brand">
+        <p className="eyebrow">Distributed workflow engine · built by Anish Kumar</p>
+        <h1>
+          <a href="#/workflows">DevFlow</a>
+        </h1>
         <div className="header-meta">
-          <span className={`status-pill ${platformStatus === "ok" ? "success" : "retrying"}`}>{platformStatus}</span>
+          <StatusPill status={platformStatus === "ok" ? "success" : platformStatus === "degraded" ? "retrying" : "pending"} label={platformStatus} />
           <span className="meta-chip">{health?.environment || "environment unknown"}</span>
-          <span className="meta-chip">v{health?.version || "n/a"}</span>
+          <span className="meta-chip">v{health?.version || "—"}</span>
         </div>
       </div>
       <div className="header-actions">
-        <nav className="nav-tabs">
-          {pages.map((page) => (
-            <button
-              key={page.id}
-              className={page.id === activePage ? "tab active" : "tab"}
-              onClick={() => setActivePage(page.id)}
+        <nav className="nav-tabs" aria-label="Primary">
+          {NAV.filter((item) => !item.adminOnly || isAdmin).map((item) => (
+            <a
+              key={item.name}
+              href={item.href}
+              className={item.name === routeName || (item.name === "workflows" && routeName === "builder") ? "tab active" : "tab"}
+              aria-current={item.name === routeName ? "page" : undefined}
             >
-              {page.label}
-            </button>
+              {item.label}
+            </a>
           ))}
         </nav>
-        <button className="secondary-button" onClick={onRefresh} disabled={isRefreshing}>
-          {isRefreshing ? "Refreshing..." : "Refresh Runtime"}
-        </button>
+        <div className="header-session">
+          <span className="meta-chip" title={me?.tenant_name || ""}>
+            {me?.role ? `${me.role} · ${me.key_name}` : "not signed in"}
+          </span>
+          <button className="secondary-button" onClick={onRefresh} disabled={isRefreshing}>
+            {isRefreshing ? "Refreshing…" : "Refresh"}
+          </button>
+          <button className="ghost-button" onClick={onLogout}>
+            Sign out
+          </button>
+        </div>
       </div>
     </header>
   );

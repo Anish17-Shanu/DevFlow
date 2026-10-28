@@ -11,3 +11,12 @@ dist/
 .env.production
 coverage/
 htmlcov/
+.coverage
+*.db.bak
+backups/
+
+# E2E artifacts
+e2e.devflow.db*
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/

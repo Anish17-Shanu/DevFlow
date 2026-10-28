@@ -1,195 +1,161 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import Header from "./components/Header";
-import ExecutionDashboardPage from "./pages/ExecutionDashboardPage";
-import LogsViewPage from "./pages/LogsViewPage";
-import WorkerMonitorPage from "./pages/WorkerMonitorPage";
+import ExecutionDetailPage from "./pages/ExecutionDetailPage";
+import ExecutionsPage from "./pages/ExecutionsPage";
+import LoginPage from "./pages/LoginPage";
+import MonitorPage from "./pages/MonitorPage";
+import OperationsPage from "./pages/OperationsPage";
 import WorkflowBuilderPage from "./pages/WorkflowBuilderPage";
-import { api } from "./services/api";
+import WorkflowsPage from "./pages/WorkflowsPage";
+import { useHashRoute } from "./lib/router";
+import { api, auth } from "./services/api";
 
 export default function App() {
-  const [activePage, setActivePage] = useState("builder");
-  const [workflows, setWorkflows] = useState([]);
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
-  const [execution, setExecution] = useState(null);
-  const [tasks, setTasks] = useState([]);
-  const [logs, setLogs] = useState([]);
-  const [queue, setQueue] = useState(null);
-  const [workers, setWorkers] = useState([]);
+  const route = useHashRoute();
+  const [me, setMe] = useState(null);
+  const [booting, setBooting] = useState(true);
+  const [authError, setAuthError] = useState("");
   const [health, setHealth] = useState(null);
   const [readiness, setReadiness] = useState(null);
-  const [isBooting, setIsBooting] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
 
-  const selectedExecutionId = execution?.id || "";
+  const notify = useCallback((message, tone = "info") => {
+    setToast({ message, tone });
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 5000);
+  }, []);
 
-  const loadWorkflows = async () => {
-    const data = await api.listWorkflows();
-    setWorkflows(data);
-    setSelectedWorkflowId((current) => current || data[0]?.id || "");
-  };
-
-  const loadRuntime = async () => {
-    const [snapshotResult, healthResult, readinessResult] = await Promise.allSettled([
-      api.getSystemSnapshot(),
-      api.getHealth(),
-      api.getReadiness()
-    ]);
-    if (snapshotResult.status === "fulfilled") {
-      setQueue(snapshotResult.value?.queue ?? null);
-      setWorkers(snapshotResult.value?.workers ?? []);
-    }
-    if (healthResult.status === "fulfilled") {
-      setHealth(healthResult.value);
-    }
-    if (readinessResult.status === "fulfilled") {
-      setReadiness(readinessResult.value);
-    }
-    if (snapshotResult.status === "rejected") {
-      throw snapshotResult.reason;
-    }
-  };
-
-  const loadExecution = async (executionId) => {
-    if (!executionId) {
-      setExecution(null);
-      setTasks([]);
-      setLogs([]);
-      return;
-    }
-
-    const [executionData, taskData, logData] = await Promise.all([
-      api.getExecution(executionId),
-      api.getExecutionTasks(executionId),
-      api.getExecutionLogs(executionId)
-    ]);
-
-    setExecution(executionData);
-    setTasks(taskData);
-    setLogs(logData);
-  };
-
-  useEffect(() => {
-    const boot = async () => {
-      try {
-        await Promise.all([loadWorkflows(), loadRuntime()]);
-      } catch (bootError) {
-        setError(bootError.message);
-      } finally {
-        setIsBooting(false);
-      }
-    };
-
-    boot();
+  const loadHealth = useCallback(async () => {
+    const [healthResult, readinessResult] = await Promise.allSettled([api.getHealth(), api.getReadiness()]);
+    if (healthResult.status === "fulfilled") setHealth(healthResult.value);
+    if (readinessResult.status === "fulfilled") setReadiness(readinessResult.value);
   }, []);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      loadRuntime().catch(() => undefined);
-      if (selectedExecutionId) {
-        loadExecution(selectedExecutionId).catch(() => undefined);
+    const boot = async () => {
+      if (!auth.hasKey()) {
+        setBooting(false);
+        return;
       }
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [selectedExecutionId]);
+      try {
+        setMe(await api.me());
+      } catch (error) {
+        auth.clearKey();
+        setAuthError(error.status === 401 ? "Your session expired. Sign in again." : error.message);
+      } finally {
+        setBooting(false);
+      }
+    };
+    boot();
+    loadHealth();
+  }, [loadHealth]);
 
   useEffect(() => {
-    if (!selectedExecutionId) {
-      return undefined;
-    }
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") loadHealth();
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [loadHealth]);
 
-    let disposed = false;
-    let socket;
-    let retryTimer;
-    let attempt = 0;
-
-    const connect = () => {
-      socket = api.executionSocket(selectedExecutionId);
-      socket.onopen = () => {
-        attempt = 0;
-        setError((current) => (current.startsWith("Realtime stream") ? "" : current));
-        socket.send("subscribe");
-      };
-      socket.onmessage = () => loadExecution(selectedExecutionId).catch(() => undefined);
-      socket.onclose = () => {
-        if (disposed) {
-          return;
-        }
-        attempt += 1;
-        setError("Realtime stream disconnected. Reconnecting...");
-        retryTimer = setTimeout(connect, Math.min(1000 * 2 ** (attempt - 1), 15000));
-      };
-      socket.onerror = () => socket.close();
+  useEffect(() => {
+    const onUnauthorized = () => {
+      if (!me) return;
+      auth.clearKey();
+      setMe(null);
+      setAuthError("Your API key is no longer valid. Sign in again.");
     };
+    window.addEventListener("devflow:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("devflow:unauthorized", onUnauthorized);
+  }, [me]);
 
-    connect();
-
-    return () => {
-      disposed = true;
-      clearTimeout(retryTimer);
-      socket?.close();
-    };
-  }, [selectedExecutionId]);
-
-  const handleCreateWorkflow = async (payload) => {
-    const created = await api.createWorkflow(payload);
-    setWorkflows((current) => [created, ...current]);
-    setSelectedWorkflowId(created.id);
+  const logout = () => {
+    auth.clearKey();
+    setMe(null);
+    setAuthError("");
+    setToast(null);
+    window.location.hash = "#/workflows";
   };
 
-  const handleRunWorkflow = async (workflowId) => {
-    const run = await api.runWorkflow(workflowId);
-    setSelectedWorkflowId(workflowId);
-    await loadExecution(run.id);
-    await loadRuntime();
-    setActivePage("executions");
+  const refresh = async () => {
+    setRefreshing(true);
+    await loadHealth();
+    setRefreshing(false);
+    notify("Runtime status refreshed.", "success");
   };
 
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    setError("");
-    try {
-      await Promise.all([loadWorkflows(), loadRuntime(), loadExecution(selectedExecutionId)]);
-    } catch (refreshError) {
-      setError(refreshError.message);
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
+  if (booting) {
+    return <div className="boot-screen">Starting DevFlow…</div>;
+  }
+
+  if (!me) {
+    return (
+      <LoginPage
+        initialError={authError}
+        onAuthenticated={(principal) => {
+          setMe(principal);
+          setAuthError("");
+          if (!window.location.hash || window.location.hash === "#/") {
+            window.location.hash = "#/workflows";
+          }
+        }}
+      />
+    );
+  }
+
+  const [section, param, sub] = route.segments;
+  const isBuilder = section === "workflows" && (param === "new" || sub === "edit");
+  const sectionName = section || "workflows";
+
+  let page = null;
+  if (sectionName === "workflows") {
+    page = isBuilder ? (
+      <WorkflowBuilderPage workflowId={param === "new" ? "" : param} me={me} notify={notify} />
+    ) : (
+      <WorkflowsPage me={me} notify={notify} />
+    );
+  } else if (sectionName === "executions") {
+    page = param ? (
+      <ExecutionDetailPage executionId={param} me={me} notify={notify} />
+    ) : (
+      <ExecutionsPage routeQuery={route.query} notify={notify} />
+    );
+  } else if (sectionName === "monitor") {
+    page = <MonitorPage me={me} />;
+  } else if (sectionName === "operations") {
+    page =
+      me.role === "admin" ? (
+        <OperationsPage notify={notify} />
+      ) : (
+        <div className="empty-state">Operations require an admin key.</div>
+      );
+  } else {
+    page = (
+      <div className="empty-state">
+        Page not found. <a href="#/workflows">Go to workflows</a>.
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell">
       <Header
-        activePage={activePage}
-        setActivePage={setActivePage}
+        routeName={isBuilder ? "builder" : sectionName}
+        me={me}
         health={health}
         readiness={readiness}
-        onRefresh={handleRefresh}
-        isRefreshing={isRefreshing}
+        onRefresh={refresh}
+        isRefreshing={refreshing}
+        onLogout={logout}
       />
-
-      {error ? <div className="global-error">{error}</div> : null}
-      {isBooting ? <div className="empty-state">Loading control plane...</div> : null}
-
-      {activePage === "builder" ? (
-        <WorkflowBuilderPage
-          workflows={workflows}
-          onCreateWorkflow={handleCreateWorkflow}
-          onRunWorkflow={handleRunWorkflow}
-          lastExecutionId={selectedExecutionId}
-          selectedWorkflowId={selectedWorkflowId}
-        />
+      {page}
+      {toast ? (
+        <div className={`toast ${toast.tone}`} role="status" onClick={() => setToast(null)}>
+          {toast.message}
+        </div>
       ) : null}
-
-      {activePage === "executions" ? (
-        <ExecutionDashboardPage execution={execution} tasks={tasks} workflows={workflows} queue={queue} workers={workers} />
-      ) : null}
-
-      {activePage === "logs" ? <LogsViewPage logs={logs} execution={execution} /> : null}
-
-      {activePage === "workers" ? <WorkerMonitorPage queue={queue} workers={workers} readiness={readiness} /> : null}
     </div>
   );
 }
