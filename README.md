@@ -7,6 +7,8 @@ All primary documentation in this README is presented as the work of **Anish Kum
 
 DevFlow is a production-style distributed workflow and job processing engine built around a strict `Web -> API -> Queue -> Worker -> DB -> UI` architecture. Teams can define DAG-based workflows, execute them asynchronously, inspect task lifecycles in real time, and monitor queue or worker health from a React control plane.
 
+> **Project status:** not yet fully production-grade. See [ROADMAP.md](ROADMAP.md) for the living checklist of completed hardening work and remaining gaps (auth, migrations, observability, HA).
+
 ## Highlights
 
 - FastAPI backend with workflow, execution, monitoring, and websocket endpoints.
@@ -20,12 +22,13 @@ DevFlow is a production-style distributed workflow and job processing engine bui
 
 ## Architecture
 
-- [Architecture Guide](d:/Project/DevFlow/docs/ARCHITECTURE.md)
-- [API Guide](d:/Project/DevFlow/docs/API.md)
-- [Deployment Guide](d:/Project/DevFlow/docs/DEPLOYMENT.md)
-- [Operations Runbook](d:/Project/DevFlow/docs/OPERATIONS.md)
-- [Troubleshooting Guide](d:/Project/DevFlow/docs/TROUBLESHOOTING.md)
-- [Contributing Guide](d:/Project/DevFlow/docs/CONTRIBUTING.md)
+- [Architecture Guide](docs/ARCHITECTURE.md)
+- [API Guide](docs/API.md)
+- [Deployment Guide](docs/DEPLOYMENT.md)
+- [Operations Runbook](docs/OPERATIONS.md)
+- [Troubleshooting Guide](docs/TROUBLESHOOTING.md)
+- [Contributing Guide](docs/CONTRIBUTING.md)
+- [Production Readiness Roadmap](ROADMAP.md)
 
 ## Core API
 
@@ -46,13 +49,16 @@ DevFlow is a production-style distributed workflow and job processing engine bui
 
 ## Local Development
 
+Requires **Python 3.12, 3.13, or 3.14** and **Node.js 20+**. The dependency pins are verified against all three Python versions in CI.
+
 ### Backend
 
 ```bash
 cd DevFlow
 python -m venv .venv
-.venv\Scripts\activate
-pip install -r backend/requirements.txt
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # macOS / Linux
+pip install -r backend/requirements-dev.txt
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -87,7 +93,7 @@ Default container endpoints:
 
 ## Environment Variables
 
-Copy [.env.example](d:/Project/DevFlow/.env.example) to `.env` and adjust values as needed.
+Copy [.env.example](.env.example) to `.env` and adjust values as needed.
 
 - `DEVFLOW_ENVIRONMENT`
 - `DEVFLOW_APP_VERSION`
@@ -96,17 +102,22 @@ Copy [.env.example](d:/Project/DevFlow/.env.example) to `.env` and adjust values
 - `DEVFLOW_WORKER_POLL_INTERVAL_MS`
 - `DEVFLOW_WORKER_HEARTBEAT_INTERVAL_SECONDS`
 - `DEVFLOW_INLINE_WORKERS_ENABLED`
-- `DEVFLOW_CORS_ORIGINS`
+- `DEVFLOW_CORS_ORIGINS` (required in production)
 - `DEVFLOW_DOCS_ENABLED`
 - `DEVFLOW_LOG_LEVEL`
 - `DEVFLOW_QUEUE_LEASE_SECONDS`
 - `DEVFLOW_REALTIME_POLL_INTERVAL_MS`
+- `DEVFLOW_MAX_REQUEST_BODY_BYTES`
+- `POSTGRES_PASSWORD` (Docker Compose only; defaults to `devflow` for local use)
 
 ## Verification
 
 ```bash
+pip install -r backend/requirements-dev.txt
+ruff check backend
 python -m pytest
 cd frontend
+npm ci
 npm run build
 ```
 

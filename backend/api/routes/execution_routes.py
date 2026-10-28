@@ -1,11 +1,10 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.dependencies import get_execution_service
 from backend.controllers.execution_controller import ExecutionController
 from backend.core.database import get_db_session
 from backend.schemas.workflow import ExecutionLogResponse, ExecutionResponse, ExecutionTaskResponse
-
 
 router = APIRouter(tags=["executions"])
 
@@ -24,9 +23,8 @@ async def run_workflow(
 async def get_execution(
     execution_id: str,
     session: AsyncSession = Depends(get_db_session),
-    execution_service=Depends(get_execution_service),
 ):
-    controller = ExecutionController(session, execution_service)
+    controller = ExecutionController(session)
     return await controller.get_execution(execution_id)
 
 
@@ -34,9 +32,8 @@ async def get_execution(
 async def get_execution_tasks(
     execution_id: str,
     session: AsyncSession = Depends(get_db_session),
-    execution_service=Depends(get_execution_service),
 ):
-    controller = ExecutionController(session, execution_service)
+    controller = ExecutionController(session)
     tasks = await controller.get_tasks(execution_id)
     return [
         ExecutionTaskResponse(
@@ -59,8 +56,9 @@ async def get_execution_tasks(
 @router.get("/executions/{execution_id}/logs", response_model=list[ExecutionLogResponse])
 async def get_execution_logs(
     execution_id: str,
+    limit: int = Query(default=1000, ge=1, le=5000),
+    offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_db_session),
-    execution_service=Depends(get_execution_service),
 ):
-    controller = ExecutionController(session, execution_service)
-    return await controller.get_logs(execution_id)
+    controller = ExecutionController(session)
+    return await controller.get_logs(execution_id, limit=limit, offset=offset)

@@ -1,6 +1,9 @@
 import { useState } from "react";
 
+let taskSequence = 0;
+
 const createEmptyTask = () => ({
+  id: `task-${Date.now()}-${taskSequence++}`,
   name: "",
   dependencies: "",
   duration_ms: 1000,
@@ -28,6 +31,7 @@ export default function WorkflowBuilderPage({
   };
 
   const addTask = () => setTasks((current) => [...current, createEmptyTask()]);
+  const removeTask = (index) => setTasks((current) => current.filter((_, i) => i !== index));
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -76,7 +80,7 @@ export default function WorkflowBuilderPage({
           </label>
           <div className="task-editor-list">
             {tasks.map((task, index) => (
-              <div key={`${index}-${task.name}`} className="task-editor">
+              <div key={task.id} className="task-editor">
                 <label>
                   Task name
                   <input
@@ -151,6 +155,16 @@ export default function WorkflowBuilderPage({
                     onChange={(event) => updateTask(index, "priority", event.target.value)}
                   />
                 </label>
+                <div className="form-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => removeTask(index)}
+                    disabled={tasks.length === 1}
+                  >
+                    Remove task
+                  </button>
+                </div>
               </div>
             ))}
           </div>

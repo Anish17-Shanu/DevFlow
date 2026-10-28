@@ -25,7 +25,7 @@ class TaskConfig(BaseModel):
 
 class WorkflowTaskCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    dependencies: list[str] = Field(default_factory=list)
+    dependencies: list[str] = Field(default_factory=list, max_length=100)
     config: TaskConfig = Field(default_factory=TaskConfig)
 
     @field_validator("name")
@@ -51,7 +51,7 @@ class WorkflowTaskCreate(BaseModel):
 
 class WorkflowCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    tasks: list[WorkflowTaskCreate]
+    tasks: list[WorkflowTaskCreate] = Field(max_length=200)
 
     @field_validator("name")
     @classmethod

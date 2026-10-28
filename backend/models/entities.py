@@ -45,13 +45,13 @@ class Workflow(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
-    tasks: Mapped[list["TaskDefinition"]] = relationship(
+    tasks: Mapped[list[TaskDefinition]] = relationship(
         "TaskDefinition",
         back_populates="workflow",
         cascade="all, delete-orphan",
         order_by="TaskDefinition.created_at",
     )
-    executions: Mapped[list["Execution"]] = relationship("Execution", back_populates="workflow")
+    executions: Mapped[list[Execution]] = relationship("Execution", back_populates="workflow")
 
 
 class TaskDefinition(Base):
@@ -69,7 +69,7 @@ class TaskDefinition(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
     workflow: Mapped[Workflow] = relationship("Workflow", back_populates="tasks")
-    execution_tasks: Mapped[list["ExecutionTask"]] = relationship("ExecutionTask", back_populates="task")
+    execution_tasks: Mapped[list[ExecutionTask]] = relationship("ExecutionTask", back_populates="task")
 
 
 class Execution(Base):
@@ -82,19 +82,21 @@ class Execution(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     workflow_id: Mapped[str] = mapped_column(ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False)
-    status: Mapped[ExecutionStatus] = mapped_column(Enum(ExecutionStatus), default=ExecutionStatus.pending, nullable=False)
+    status: Mapped[ExecutionStatus] = mapped_column(
+        Enum(ExecutionStatus), default=ExecutionStatus.pending, nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     workflow: Mapped[Workflow] = relationship("Workflow", back_populates="executions")
-    execution_tasks: Mapped[list["ExecutionTask"]] = relationship(
+    execution_tasks: Mapped[list[ExecutionTask]] = relationship(
         "ExecutionTask",
         back_populates="execution",
         cascade="all, delete-orphan",
     )
-    logs: Mapped[list["ExecutionLog"]] = relationship(
+    logs: Mapped[list[ExecutionLog]] = relationship(
         "ExecutionLog",
         back_populates="execution",
         cascade="all, delete-orphan",

@@ -8,6 +8,10 @@ class ExecutionRepository:
     def __init__(self, session):
         self.session = session
 
+    async def execution_exists(self, execution_id: str) -> bool:
+        result = await self.session.scalar(select(Execution.id).where(Execution.id == execution_id))
+        return result is not None
+
     async def get_execution(self, execution_id: str) -> Execution | None:
         result = await self.session.execute(
             select(Execution)
@@ -15,7 +19,6 @@ class ExecutionRepository:
             .options(
                 selectinload(Execution.workflow).selectinload(Workflow.tasks),
                 selectinload(Execution.execution_tasks).selectinload(ExecutionTask.task),
-                selectinload(Execution.logs),
             )
         )
         return result.scalars().unique().first()
@@ -28,10 +31,12 @@ class ExecutionRepository:
         )
         return list(result.scalars().unique())
 
-    async def list_logs(self, execution_id: str) -> list[ExecutionLog]:
+    async def list_logs(self, execution_id: str, limit: int, offset: int) -> list[ExecutionLog]:
         result = await self.session.execute(
             select(ExecutionLog)
             .where(ExecutionLog.execution_id == execution_id)
             .order_by(ExecutionLog.created_at.asc())
+            .limit(limit)
+            .offset(offset)
         )
         return list(result.scalars())

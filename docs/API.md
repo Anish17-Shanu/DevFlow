@@ -18,7 +18,7 @@
 - `GET /api/executions/{execution_id}/tasks`
   Returns execution task state, retry count, assigned worker, and errors.
 - `GET /api/executions/{execution_id}/logs`
-  Returns execution logs ordered by creation time.
+  Returns execution logs ordered by creation time. Supports `limit` (1-5000, default 1000) and `offset` (default 0).
 
 ## Monitoring Endpoints
 
@@ -37,6 +37,10 @@
   Lightweight liveness check suitable for container probes.
 - `GET /health/ready`
   Readiness check with database status, worker health summary, and queue status.
+
+Health endpoints are served at the root path, not under `/api`. In production, readiness reports `degraded` when no workers are running.
+
+All HTTP responses include `X-Request-ID`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and `Cache-Control: no-store`. Requests larger than `DEVFLOW_MAX_REQUEST_BODY_BYTES` are rejected with `413`.
 
 ## Websocket Endpoint
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -14,6 +15,8 @@ from backend.core.time import utc_now
 from backend.models.entities import WorkerRecord
 from backend.queue.job_queue import DatabaseJobQueue
 from backend.services.execution_service import ExecutionService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -79,7 +82,19 @@ class WorkerManager:
         while self._running:
             snapshot.last_seen_at = utc_now()
             await self._persist_snapshot(snapshot, is_active=True)
-            job = await self.queue.dequeue(worker_id=worker_id, timeout=timeout)
+            try:
+                job = await self.queue.dequeue(worker_id=worker_id, timeout=timeout)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("Worker %s failed to poll the queue.", worker_id)
+                snapshot.failed_jobs += 1
+                snapshot.last_error = str(exc)
+                snapshot.state = "error"
+                snapshot.last_seen_at = utc_now()
+                await self._persist_snapshot(snapshot, is_active=True, force=True)
+                await asyncio.sleep(timeout)
+                continue
             if not job:
                 snapshot.state = "idle"
                 snapshot.current_execution_id = None
@@ -127,7 +142,13 @@ class WorkerManager:
         interval = max(min(self.queue.lease_seconds / 2, settings.worker_heartbeat_interval_seconds), 1)
         while self._running:
             await asyncio.sleep(interval)
-            renewed = await self.queue.renew_lease(job_id, worker_id)
+            try:
+                renewed = await self.queue.renew_lease(job_id, worker_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Worker %s failed to renew lease for job %s.", worker_id, job_id)
+                return
             if not renewed:
                 return
             snapshot.last_seen_at = utc_now()
@@ -141,22 +162,26 @@ class WorkerManager:
             if elapsed < settings.worker_heartbeat_interval_seconds:
                 return
 
-        async with self._session_factory() as session:
-            record = await session.get(WorkerRecord, snapshot.worker_id)
-            if record is None:
-                record = WorkerRecord(worker_id=snapshot.worker_id)
-                session.add(record)
+        try:
+            async with self._session_factory() as session:
+                record = await session.get(WorkerRecord, snapshot.worker_id)
+                if record is None:
+                    record = WorkerRecord(worker_id=snapshot.worker_id)
+                    session.add(record)
 
-            record.state = snapshot.state
-            record.current_execution_id = snapshot.current_execution_id
-            record.current_task_id = snapshot.current_task_id
-            record.processed_jobs = snapshot.processed_jobs
-            record.failed_jobs = snapshot.failed_jobs
-            record.last_seen_at = snapshot.last_seen_at
-            record.last_error = snapshot.last_error
-            record.is_active = is_active
-            record.updated_at = now
-            await session.commit()
+                record.state = snapshot.state
+                record.current_execution_id = snapshot.current_execution_id
+                record.current_task_id = snapshot.current_task_id
+                record.processed_jobs = snapshot.processed_jobs
+                record.failed_jobs = snapshot.failed_jobs
+                record.last_seen_at = snapshot.last_seen_at
+                record.last_error = snapshot.last_error
+                record.is_active = is_active
+                record.updated_at = now
+                await session.commit()
+        except SQLAlchemyError:
+            logger.exception("Failed to persist heartbeat for worker %s.", snapshot.worker_id)
+            return
         self._last_persisted_at[snapshot.worker_id] = now
 
     async def snapshots(self) -> list[WorkerSnapshot]:
@@ -165,6 +190,7 @@ class WorkerManager:
                 result = await session.execute(select(WorkerRecord).order_by(WorkerRecord.worker_id.asc()))
                 records = result.scalars().all()
         except SQLAlchemyError:
+            logger.exception("Failed to load worker snapshots.")
             return []
 
         stale_after = settings.worker_heartbeat_interval_seconds * 2

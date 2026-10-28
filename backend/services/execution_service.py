@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -254,7 +254,11 @@ class ExecutionService:
                 if item.status != TaskState.pending:
                     continue
                 dependency_names = item.task.dependencies or []
-                if any(execution_items[workflow_tasks[name].id].status == TaskState.failed for name in dependency_names):
+                has_failed_dependency = any(
+                    execution_items[workflow_tasks[name].id].status == TaskState.failed
+                    for name in dependency_names
+                )
+                if has_failed_dependency:
                     item.status = TaskState.failed
                     item.finished_at = utc_now()
                     item.error_message = "Blocked by failed dependency."

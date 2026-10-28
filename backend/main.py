@@ -1,10 +1,11 @@
 import logging
+import uuid
 from contextlib import asynccontextmanager
 
-from sqlalchemy import text
-
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from backend.api.routes.execution_routes import router as execution_router
 from backend.api.routes.monitor_routes import router as monitor_router
@@ -55,6 +56,7 @@ async def lifespan(app: FastAPI):
 
     await runtime.worker_manager.stop()
     await runtime.execution_notifier.stop()
+    await engine.dispose()
 
 
 app = FastAPI(
@@ -71,6 +73,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def harden_responses(request: Request, call_next):
+    request_id = uuid.uuid4().hex
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            length = int(content_length)
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."})
+        if length > settings.max_request_body_bytes:
+            return JSONResponse(status_code=413, content={"detail": "Request body too large."})
+
+    response = await call_next(request)
+    response.headers.setdefault("X-Request-ID", request_id)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Cache-Control", "no-store")
+    if settings.is_production:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception("Unhandled error while processing %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error."})
+
 
 app.include_router(workflow_router, prefix=settings.api_prefix)
 app.include_router(execution_router, prefix=settings.api_prefix)
@@ -112,7 +144,8 @@ async def readiness() -> ReadinessResponse:
     else:
         worker_status = "degraded"
     queue_status = await runtime.queue.stats()
-    overall_status = "ok" if database_status == "ok" and worker_status != "degraded" else "degraded"
+    unhealthy_workers = settings.is_production and worker_status != "running"
+    overall_status = "ok" if database_status == "ok" and not unhealthy_workers else "degraded"
     return ReadinessResponse(
         status=overall_status,
         service=settings.app_name,

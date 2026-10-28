@@ -1,8 +1,7 @@
 from pathlib import Path
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
@@ -23,8 +22,15 @@ class Settings(BaseSettings):
     queue_name: str = "database"
     queue_lease_seconds: int = Field(default=30, ge=5, le=3600)
     realtime_poll_interval_ms: int = Field(default=1000, ge=250, le=10000)
+    max_request_body_bytes: int = Field(default=1_048_576, ge=1024, le=50_000_000)
 
     model_config = SettingsConfigDict(env_prefix="DEVFLOW_", env_file=".env", extra="ignore")
+
+    @model_validator(mode="after")
+    def validate_production_settings(self) -> "Settings":
+        if self.is_production and not self.cors_origin_list:
+            raise ValueError("DEVFLOW_CORS_ORIGINS must list at least one origin in production.")
+        return self
 
     @computed_field
     @property

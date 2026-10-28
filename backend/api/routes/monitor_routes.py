@@ -4,7 +4,6 @@ from backend.api.dependencies import get_queue, get_worker_manager
 from backend.controllers.monitor_controller import MonitorController
 from backend.schemas.workflow import QueueStatusResponse, SystemSnapshotResponse, WorkerStatusResponse
 
-
 router = APIRouter(tags=["monitoring"])
 
 

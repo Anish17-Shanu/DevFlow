@@ -1,3 +1,9 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -5,7 +11,7 @@ services:
     environment:
       POSTGRES_DB: devflow
       POSTGRES_USER: devflow
-      POSTGRES_PASSWORD: devflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devflow}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -13,21 +19,26 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
 
   api:
     build:
       context: .
       dockerfile: backend/Dockerfile
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
     ports:
       - "8000:8000"
     environment:
-      DEVFLOW_DATABASE_URL: postgresql+asyncpg://devflow:devflow@postgres:5432/devflow
+      DEVFLOW_DATABASE_URL: postgresql+asyncpg://devflow:${POSTGRES_PASSWORD:-devflow}@postgres:5432/devflow
       DEVFLOW_ENVIRONMENT: production
       DEVFLOW_INLINE_WORKERS_ENABLED: "false"
       DEVFLOW_WORKER_COUNT: "1"
       DEVFLOW_DOCS_ENABLED: "false"
-      DEVFLOW_CORS_ORIGINS: http://localhost:8080
+      DEVFLOW_CORS_ORIGINS: ${DEVFLOW_CORS_ORIGINS:-http://localhost:8080}
     depends_on:
       postgres:
         condition: service_healthy
@@ -36,15 +47,20 @@ services:
       interval: 20s
       timeout: 5s
       retries: 5
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
 
   worker:
     build:
       context: .
       dockerfile: backend/Dockerfile
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
     command: ["python", "-m", "backend.worker_main"]
     environment:
-      DEVFLOW_DATABASE_URL: postgresql+asyncpg://devflow:devflow@postgres:5432/devflow
+      DEVFLOW_DATABASE_URL: postgresql+asyncpg://devflow:${POSTGRES_PASSWORD:-devflow}@postgres:5432/devflow
       DEVFLOW_ENVIRONMENT: production
       DEVFLOW_INLINE_WORKERS_ENABLED: "false"
       DEVFLOW_WORKER_COUNT: "4"
@@ -55,21 +71,27 @@ services:
       postgres:
         condition: service_healthy
       api:
-        condition: service_started
+        condition: service_healthy
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
 
   frontend:
     build:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        VITE_API_BASE_URL: http://localhost:8000/api
-        VITE_WS_BASE_URL: ws://localhost:8000
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api}
+        VITE_WS_BASE_URL: ${VITE_WS_BASE_URL:-ws://localhost:8000}
     restart: unless-stopped
     ports:
       - "8080:80"
     depends_on:
       api:
         condition: service_healthy
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   postgres_data:

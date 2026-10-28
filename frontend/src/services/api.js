@@ -1,26 +1,44 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api").replace(/\/$/, "");
+const API_ROOT = API_BASE.replace(/\/api$/, "");
 const WS_BASE = (import.meta.env.VITE_WS_BASE_URL || "ws://localhost:8000").replace(/\/$/, "");
+const REQUEST_TIMEOUT_MS = 15000;
 
-async function request(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {})
-    },
-    ...options
-  });
+async function fetchJson(url, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({ detail: "Request failed" }));
-    throw new Error(payload.detail || "Request failed");
+  try {
+    const response = await fetch(url, {
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      },
+      ...options,
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({ detail: "Request failed" }));
+      throw new Error(payload.detail || `Request failed with status ${response.status}.`);
+    }
+
+    if (response.status === 204) {
+      return null;
+    }
+
+    return response.json().catch(() => null);
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("Request timed out.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-
-  if (response.status === 204) {
-    return null;
-  }
-
-  return response.json().catch(() => null);
 }
+
+const request = (path, options) => fetchJson(`${API_BASE}${path}`, options);
+const requestRoot = (path) => fetchJson(`${API_ROOT}${path}`);
 
 export const api = {
   listWorkflows: () => request("/workflows"),
@@ -39,7 +57,7 @@ export const api = {
   getQueueStatus: () => request("/queue/status"),
   getWorkersStatus: () => request("/workers/status"),
   getSystemSnapshot: () => request("/system/snapshot"),
-  getHealth: () => request("/health"),
-  getReadiness: () => request("/health/ready"),
+  getHealth: () => requestRoot("/health"),
+  getReadiness: () => requestRoot("/health/ready"),
   executionSocket: (executionId) => new WebSocket(`${WS_BASE}/ws/executions/${executionId}`)
 };

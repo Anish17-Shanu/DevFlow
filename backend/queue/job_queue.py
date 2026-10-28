@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -12,6 +13,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from backend.core.config import settings
 from backend.core.time import utc_now
 from backend.models.entities import QueueJobRecord, QueueJobState
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(order=True)
@@ -32,10 +35,15 @@ class QueueJob:
 class DatabaseJobQueue:
     def __init__(self, session_factory: async_sessionmaker):
         self._session_factory = session_factory
+        self._last_requeue_at = 0.0
 
     @property
     def lease_seconds(self) -> int:
         return settings.queue_lease_seconds
+
+    @property
+    def requeue_interval_seconds(self) -> float:
+        return max(1.0, min(self.lease_seconds / 2, 5.0))
 
     async def enqueue(self, job: QueueJob, session=None) -> None:
         record = QueueJobRecord(
@@ -60,7 +68,7 @@ class DatabaseJobQueue:
     async def dequeue(self, worker_id: str, timeout: float = 1.0) -> QueueJob | None:
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
-            await self.requeue_stale_jobs()
+            await self._requeue_stale_jobs_if_due()
             job = await self._claim_next_available(worker_id)
             if job:
                 return job
@@ -69,6 +77,13 @@ class DatabaseJobQueue:
             if remaining <= 0:
                 return None
             await asyncio.sleep(min(0.25, remaining))
+
+    async def _requeue_stale_jobs_if_due(self) -> None:
+        now = asyncio.get_running_loop().time()
+        if now - self._last_requeue_at < self.requeue_interval_seconds:
+            return
+        self._last_requeue_at = now
+        await self.requeue_stale_jobs()
 
     async def _claim_next_available(self, worker_id: str) -> QueueJob | None:
         now = utc_now()
@@ -202,9 +217,12 @@ class DatabaseJobQueue:
                 )
                 total_enqueued = await session.scalar(select(func.count()).select_from(QueueJobRecord))
                 total_processed = await session.scalar(
-                    select(func.count()).select_from(QueueJobRecord).where(QueueJobRecord.state == QueueJobState.completed)
+                    select(func.count())
+                    .select_from(QueueJobRecord)
+                    .where(QueueJobRecord.state == QueueJobState.completed)
                 )
         except SQLAlchemyError:
+            logger.exception("Failed to compute queue statistics.")
             queued_jobs = delayed_jobs = in_flight_jobs = total_enqueued = total_processed = 0
 
         return {

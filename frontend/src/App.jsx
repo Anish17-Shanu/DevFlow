@@ -31,15 +31,24 @@ export default function App() {
   };
 
   const loadRuntime = async () => {
-    const [snapshotData, healthData, readinessData] = await Promise.all([
+    const [snapshotResult, healthResult, readinessResult] = await Promise.allSettled([
       api.getSystemSnapshot(),
       api.getHealth(),
       api.getReadiness()
     ]);
-    setQueue(snapshotData?.queue ?? null);
-    setWorkers(snapshotData?.workers ?? []);
-    setHealth(healthData);
-    setReadiness(readinessData);
+    if (snapshotResult.status === "fulfilled") {
+      setQueue(snapshotResult.value?.queue ?? null);
+      setWorkers(snapshotResult.value?.workers ?? []);
+    }
+    if (healthResult.status === "fulfilled") {
+      setHealth(healthResult.value);
+    }
+    if (readinessResult.status === "fulfilled") {
+      setReadiness(readinessResult.value);
+    }
+    if (snapshotResult.status === "rejected") {
+      throw snapshotResult.reason;
+    }
   };
 
   const loadExecution = async (executionId) => {
@@ -91,13 +100,36 @@ export default function App() {
       return undefined;
     }
 
-    const socket = api.executionSocket(selectedExecutionId);
-    socket.onopen = () => socket.send("subscribe");
-    socket.onmessage = () => loadExecution(selectedExecutionId).catch(() => undefined);
-    socket.onerror = () => setError("Realtime stream disconnected. Falling back to polling.");
+    let disposed = false;
+    let socket;
+    let retryTimer;
+    let attempt = 0;
+
+    const connect = () => {
+      socket = api.executionSocket(selectedExecutionId);
+      socket.onopen = () => {
+        attempt = 0;
+        setError((current) => (current.startsWith("Realtime stream") ? "" : current));
+        socket.send("subscribe");
+      };
+      socket.onmessage = () => loadExecution(selectedExecutionId).catch(() => undefined);
+      socket.onclose = () => {
+        if (disposed) {
+          return;
+        }
+        attempt += 1;
+        setError("Realtime stream disconnected. Reconnecting...");
+        retryTimer = setTimeout(connect, Math.min(1000 * 2 ** (attempt - 1), 15000));
+      };
+      socket.onerror = () => socket.close();
+    };
+
+    connect();
 
     return () => {
-      socket.close();
+      disposed = true;
+      clearTimeout(retryTimer);
+      socket?.close();
     };
   }, [selectedExecutionId]);
 
