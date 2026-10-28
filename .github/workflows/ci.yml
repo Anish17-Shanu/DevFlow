@@ -174,7 +174,7 @@ jobs:
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
       - name: Scan API image for vulnerabilities
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: devflow-api:ci
           format: table
@@ -182,7 +182,7 @@ jobs:
           ignore-unfixed: true
           severity: HIGH,CRITICAL
       - name: Scan frontend image for vulnerabilities
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: devflow-frontend:ci
           format: table
