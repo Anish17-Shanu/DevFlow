@@ -13,4 +13,4 @@ cryptography==50.0.2
 httpx==0.28.1
 prometheus-client==0.24.1
 croniter==6.0.0
-redis==7.1.0
+redis==8.1.0
