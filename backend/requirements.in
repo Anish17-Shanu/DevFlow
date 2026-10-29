@@ -4,13 +4,13 @@ fastapi==0.162.0
 uvicorn==0.54.0
 sqlalchemy==2.1.6
 greenlet==3.5.6
-alembic==1.18.1
+alembic==1.20.1
 aiosqlite==0.22.1
 asyncpg==0.32.0
 pydantic==2.14.1
 pydantic-settings==2.16.2
 cryptography==50.0.2
 httpx==0.28.1
-prometheus-client==0.24.1
-croniter==6.0.0
+prometheus-client==0.26.0
+croniter==6.2.4
 redis==7.1.0
