@@ -8,7 +8,11 @@ RUN npm ci
 COPY . ./
 RUN npm run build
 
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+FROM nginxinc/nginx-unprivileged:1.29.8-alpine
+
+USER root
+RUN apk upgrade --no-cache && rm -rf /var/cache/apk/*
+USER 101
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
