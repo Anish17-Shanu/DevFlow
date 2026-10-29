@@ -7,7 +7,7 @@ aiosqlite==0.22.1
 asyncpg==0.32.0
 pydantic==2.14.1
 pydantic-settings==2.16.2
-cryptography==46.0.3
+cryptography==50.0.2
 httpx==0.28.1
 prometheus-client==0.24.1
 croniter==6.0.0
